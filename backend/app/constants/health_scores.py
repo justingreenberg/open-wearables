@@ -34,5 +34,6 @@ HEALTH_SCORE_RANGES: dict[HealthScoreCategory, dict[ProviderName, ScoreRange]] =
     },
     HealthScoreCategory.STRAIN: {
         ProviderName.WHOOP: ScoreRange(0, 21),
+        ProviderName.POLAR: ScoreRange(0, 300),  # TRIMP — no hard ceiling, 300 covers intense training days
     },
 }

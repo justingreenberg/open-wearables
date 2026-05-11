@@ -9,20 +9,19 @@ from app.repositories.user_connection_repository import UserConnectionRepository
 from app.schemas.enums import HealthScoreCategory, ProviderName, SeriesType
 from app.schemas.model_crud.activities import (
     EventRecordCreate,
-    SleepStage,
     EventRecordDetailCreate,
     HealthScoreCreate,
     ScoreComponent,
+    SleepStage,
     TimeSeriesSampleCreate,
 )
-from app.schemas.providers.polar import DailyActivityJSON, SleepJSON
+from app.schemas.providers.polar import CardioLoadJSON, ContinuousHeartRateJSON, DailyActivityJSON, SleepJSON
 from app.services.providers.api_client import make_authenticated_request
 from app.services.providers.templates.base_247_data import Base247DataTemplate
 from app.services.providers.templates.base_oauth import BaseOAuthTemplate
 
 
 class Polar247Data(Base247DataTemplate):
-
     _HYPNOGRAM_STAGE_MAP: dict[int, SleepStageType] = {
         0: SleepStageType.AWAKE,
         1: SleepStageType.REM,
@@ -69,11 +68,7 @@ class Polar247Data(Base247DataTemplate):
     def _get_available_sleep_dates(self, db: DbSession, user_id: UUID) -> set[date]:
         response = self._make_api_request(db, user_id, "/v3/users/sleep/available")
         nights = response.get("nights", []) if isinstance(response, dict) else []
-        return {
-            date.fromisoformat(night["date"])
-            for night in nights
-            if night.get("date")
-        }
+        return {date.fromisoformat(night["date"]) for night in nights if night.get("date")}
 
     def get_sleep_data(
         self,
@@ -83,8 +78,7 @@ class Polar247Data(Base247DataTemplate):
         end_time: datetime,
     ) -> list[dict[str, Any]]:
         date_range = {
-            start_time.date() + timedelta(days=i)
-            for i in range((end_time.date() - start_time.date()).days + 1)
+            start_time.date() + timedelta(days=i) for i in range((end_time.date() - start_time.date()).days + 1)
         }
         available_dates = self._get_available_sleep_dates(db, user_id)
         sleep_data = []
@@ -94,24 +88,36 @@ class Polar247Data(Base247DataTemplate):
                 sleep_data.append(response)
         return sleep_data
 
+    def _parse_time_key(self, key: str) -> time:
+        parts = key.split(":")
+        h, m = int(parts[0]), int(parts[1])
+        s = int(parts[2]) if len(parts) > 2 else 0
+        return time(h, m, s)
+
+    def _hhmm_to_datetimes(
+        self,
+        items: dict[str, Any],
+        anchor: datetime,
+    ) -> list[tuple[datetime, Any]]:
+        """Convert dict[HH:MM or HH:MM:SS, value] to [(datetime, value)], handling midnight crossover."""
+        result: list[tuple[datetime, Any]] = []
+        current_date = anchor.date()
+        prev_t: time | None = None
+        for key, val in items.items():
+            t = self._parse_time_key(key)
+            if prev_t is not None and t < prev_t:
+                current_date += timedelta(days=1)
+            result.append((datetime.combine(current_date, t, tzinfo=anchor.tzinfo), val))
+            prev_t = t
+        return result
+
     def _parse_hypnogram(
         self,
         hypnogram: dict[str, int],
         sleep_start: datetime,
         sleep_end: datetime,
     ) -> list[SleepStage]:
-        # Build (datetime, stage_val) in API order, handling midnight crossover
-        entries: list[tuple[datetime, int]] = []
-        current_date = sleep_start.date()
-        prev_t: time | None = None
-        for key, stage_val in hypnogram.items():
-            h, m = map(int, key.split(":"))
-            t = time(h, m)
-            if prev_t is not None and t < prev_t:
-                current_date += timedelta(days=1)
-            entries.append((datetime.combine(current_date, t, tzinfo=sleep_start.tzinfo), stage_val))
-            prev_t = t
-
+        entries = self._hhmm_to_datetimes(hypnogram, sleep_start)
         if not entries:
             return []
 
@@ -132,17 +138,43 @@ class Polar247Data(Base247DataTemplate):
             stages.append(SleepStage(stage=stage_type, start_time=group_start, end_time=sleep_end))
         return stages
 
+    def _parse_sleep_hr_samples(
+        self,
+        hr_samples: dict[str, int],
+        sleep_start: datetime,
+        user_id: UUID,
+    ) -> list[TimeSeriesSampleCreate]:
+        return [
+            TimeSeriesSampleCreate(
+                id=uuid4(),
+                user_id=user_id,
+                provider=ProviderName.POLAR,
+                source=ProviderName.POLAR,
+                recorded_at=dt,
+                value=bpm,
+                series_type=SeriesType.heart_rate,
+            )
+            for dt, bpm in self._hhmm_to_datetimes(hr_samples, sleep_start)
+        ]
+
     def normalize_sleep(  # type: ignore[override]
         self,
         raw_sleep: dict[str, Any],
         user_id: UUID,
-    ) -> tuple[EventRecordCreate, EventRecordDetailCreate, HealthScoreCreate | None]:
+    ) -> tuple[
+            EventRecordCreate,
+            EventRecordDetailCreate,
+            HealthScoreCreate | None,
+            list[TimeSeriesSampleCreate]
+        ]:
         parsed = SleepJSON.model_validate(raw_sleep)
         sleep_id = uuid4()
 
-        start_dt = datetime.fromisoformat(parsed.sleep_start_time) if parsed.sleep_start_time else None
-        end_dt = datetime.fromisoformat(parsed.sleep_end_time) if parsed.sleep_end_time else None
-        duration_seconds = int((end_dt - start_dt).total_seconds()) if start_dt and end_dt else None
+        if not parsed.sleep_start_time or not parsed.sleep_end_time:
+            raise ValueError(f"Polar sleep record missing start/end time: {parsed.date}")
+        start_dt = datetime.fromisoformat(parsed.sleep_start_time)
+        end_dt = datetime.fromisoformat(parsed.sleep_end_time)
+        duration_seconds = int((end_dt - start_dt).total_seconds())
 
         light_s = parsed.light_sleep or 0
         deep_s = parsed.deep_sleep or 0
@@ -178,7 +210,7 @@ class Polar247Data(Base247DataTemplate):
         )
 
         score: HealthScoreCreate | None = None
-        if parsed.sleep_score is not None and start_dt is not None:
+        if parsed.sleep_score is not None:
             raw_components: dict[str, float | int | None] = {
                 "sleep_time": parsed.group_duration_score,
                 "long_interruptions": parsed.long_interruption_duration,
@@ -188,9 +220,7 @@ class Polar247Data(Base247DataTemplate):
                 "deep_sleep": parsed.deep_sleep,
             }
             components: dict[str, ScoreComponent] = {
-                k: ScoreComponent(value=v)
-                for k, v in raw_components.items()
-                if v is not None
+                k: ScoreComponent(value=v) for k, v in raw_components.items() if v is not None
             }
             score = HealthScoreCreate(
                 id=uuid4(),
@@ -203,7 +233,13 @@ class Polar247Data(Base247DataTemplate):
                 sleep_record_id=sleep_id,
             )
 
-        return record, detail, score
+        hr_samples = (
+            self._parse_sleep_hr_samples(parsed.heart_rate_samples, start_dt, user_id)
+            if parsed.heart_rate_samples
+            else []
+        )
+
+        return record, detail, score, hr_samples
 
     # -------------------------------------------------------------------------
     # Daily Activity - GET /v3/users/activities
@@ -239,39 +275,150 @@ class Polar247Data(Base247DataTemplate):
         samples: list[TimeSeriesSampleCreate] = []
 
         if parsed.steps is not None:
-            samples.append(TimeSeriesSampleCreate(
-                id=uuid4(),
-                user_id=user_id,
-                provider=ProviderName.POLAR,
-                source=ProviderName.POLAR,
-                recorded_at=recorded_at,
-                value=parsed.steps,
-                series_type=SeriesType.steps,
-            ))
+            samples.append(
+                TimeSeriesSampleCreate(
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=ProviderName.POLAR,
+                    source=ProviderName.POLAR,
+                    recorded_at=recorded_at,
+                    value=parsed.steps,
+                    series_type=SeriesType.steps,
+                )
+            )
 
         if parsed.active_calories is not None:
-            samples.append(TimeSeriesSampleCreate(
-                id=uuid4(),
-                user_id=user_id,
-                provider=ProviderName.POLAR,
-                source=ProviderName.POLAR,
-                recorded_at=recorded_at,
-                value=parsed.active_calories,
-                series_type=SeriesType.energy,
-            ))
+            samples.append(
+                TimeSeriesSampleCreate(
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=ProviderName.POLAR,
+                    source=ProviderName.POLAR,
+                    recorded_at=recorded_at,
+                    value=parsed.active_calories,
+                    series_type=SeriesType.energy,
+                )
+            )
 
         if parsed.distance_from_steps is not None:
-            samples.append(TimeSeriesSampleCreate(
+            samples.append(
+                TimeSeriesSampleCreate(
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=ProviderName.POLAR,
+                    source=ProviderName.POLAR,
+                    recorded_at=recorded_at,
+                    value=Decimal(str(parsed.distance_from_steps)),
+                    series_type=SeriesType.distance_walking_running,
+                )
+            )
+
+        return samples
+
+    # -------------------------------------------------------------------------
+    # Continuous Heart Rate - GET /v3/users/continuous-heart-rate/{date}
+    # -------------------------------------------------------------------------
+
+    def get_continuous_hr_data(
+        self,
+        db: DbSession,
+        user_id: UUID,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict[str, Any]]:
+        date_range = {
+            start_time.date() + timedelta(days=i)
+            for i in range((end_time.date() - start_time.date()).days + 1)
+        }
+        results = []
+        for d in date_range:
+            response = self._make_api_request(
+                db, user_id, f"/v3/users/continuous-heart-rate/{d.isoformat()}"
+            )
+            if response:
+                results.append(response)
+        return results
+
+    def normalize_continuous_hr(
+        self,
+        raw: dict[str, Any],
+        user_id: UUID,
+    ) -> list[TimeSeriesSampleCreate]:
+        parsed = ContinuousHeartRateJSON.model_validate(raw)
+        if not parsed.date or not parsed.heart_rate_samples:
+            return []
+
+        anchor = datetime.fromisoformat(parsed.date)
+        samples_dict = {s.sample_time: s.heart_rate for s in parsed.heart_rate_samples if s.sample_time}
+        return [
+            TimeSeriesSampleCreate(
                 id=uuid4(),
                 user_id=user_id,
                 provider=ProviderName.POLAR,
                 source=ProviderName.POLAR,
-                recorded_at=recorded_at,
-                value=Decimal(str(parsed.distance_from_steps)),
-                series_type=SeriesType.distance_walking_running,
-            ))
+                recorded_at=dt,
+                value=bpm,
+                series_type=SeriesType.heart_rate,
+            )
+            for dt, bpm in self._hhmm_to_datetimes(samples_dict, anchor)
+        ]
 
-        return samples
+    # -------------------------------------------------------------------------
+    # Cardio Load - GET /v3/users/cardio-load/{date}
+    # -------------------------------------------------------------------------
+
+    def get_cardio_load_data(
+        self,
+        db: DbSession,
+        user_id: UUID,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict[str, Any]]:
+        date_range = {
+            start_time.date() + timedelta(days=i)
+            for i in range((end_time.date() - start_time.date()).days + 1)
+        }
+        results = []
+        for d in date_range:
+            response = self._make_api_request(db, user_id, f"/v3/users/cardio-load/{d.isoformat()}")
+            if response:
+                results.append(response)
+        return results
+
+    def normalize_cardio_load(
+        self,
+        raw: dict[str, Any],
+        user_id: UUID,
+    ) -> HealthScoreCreate | None:
+        parsed = CardioLoadJSON.model_validate(raw)
+        if parsed.cardio_load is None or not parsed.date:
+            return None
+
+        raw_components: dict[str, float | int | None] = {
+            "strain": parsed.strain,
+            "tolerance": parsed.tolerance,
+            "cardio_load_ratio": parsed.cardio_load_ratio,
+        }
+        if parsed.cardio_load_level:
+            lvl = parsed.cardio_load_level
+            raw_components.update({
+                "level_very_low": lvl.very_low,
+                "level_low": lvl.low,
+                "level_medium": lvl.medium,
+                "level_high": lvl.high,
+                "level_very_high": lvl.very_high,
+            })
+        components = {k: ScoreComponent(value=v) for k, v in raw_components.items() if v is not None}
+
+        return HealthScoreCreate(
+            id=uuid4(),
+            user_id=user_id,
+            provider=ProviderName.POLAR,
+            category=HealthScoreCategory.STRAIN,
+            value=parsed.cardio_load,
+            recorded_at=datetime.fromisoformat(parsed.date),
+            components=components or None,
+        )
 
     # -------------------------------------------------------------------------
     # Not implemented — Polar recovery and activity samples map to other modules

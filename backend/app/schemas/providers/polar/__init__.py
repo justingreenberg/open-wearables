@@ -1,8 +1,8 @@
 from .cardio_load import CardioLoadJSON, CardioLoadLevelJSON
 from .continuous_heart_rate import ContinuousHeartRateJSON, HeartRateSampleJSON
 from .daily_activity import (
-    ActivityZonesJSON,
     ActivityZoneSampleJSON,
+    ActivityZonesJSON,
     DailyActivityJSON,
     DailyActivitySamplesJSON,
     StepSampleJSON,
@@ -15,7 +15,6 @@ from .exercise_import import (
 )
 from .nightly_recharge import NightlyRechargeJSON, NightlyRechargeResponseJSON
 from .sleep import SleepJSON, SleepResponseJSON
-
 
 __all__ = [
     # Cardio load
