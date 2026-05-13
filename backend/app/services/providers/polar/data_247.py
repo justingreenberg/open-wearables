@@ -240,89 +240,91 @@ class Polar247Data(Base247DataTemplate):
             for dt, bpm in self._hhmm_to_datetimes(hr_samples, sleep_start)
         ]
 
+    SleepNormalized = tuple[EventRecordCreate, EventRecordDetailCreate, HealthScoreCreate | None, list[TimeSeriesSampleCreate]]
+
     def normalize_sleep(  # type: ignore[override]
         self,
-        raw_sleep: dict[str, Any],
+        raw_items: list[dict[str, Any]],
         user_id: UUID,
-    ) -> tuple[
-            EventRecordCreate,
-            EventRecordDetailCreate,
-            HealthScoreCreate | None,
-            list[TimeSeriesSampleCreate]
-        ]:
-        parsed = SleepJSON.model_validate(raw_sleep)
-        sleep_id = uuid4()
+    ) -> list[SleepNormalized]:
+        results: list[Polar247Data.SleepNormalized] = []
+        for raw in raw_items:
+            if (parsed := self._parse(raw, SleepJSON, user_id, "sleep")) is None:
+                continue
+            if not parsed.sleep_start_time or not parsed.sleep_end_time:
+                log_structured(self.logger, "warning",
+                               f"Polar sleep record missing start/end time: {parsed.date}",
+                               provider="polar", user_id=str(user_id))
+                continue
 
-        if not parsed.sleep_start_time or not parsed.sleep_end_time:
-            raise ValueError(f"Polar sleep record missing start/end time: {parsed.date}")
-        start_dt = datetime.fromisoformat(parsed.sleep_start_time)
-        end_dt = datetime.fromisoformat(parsed.sleep_end_time)
-        duration_seconds = int((end_dt - start_dt).total_seconds())
+            sleep_id = uuid4()
+            start_dt = datetime.fromisoformat(parsed.sleep_start_time)
+            end_dt = datetime.fromisoformat(parsed.sleep_end_time)
+            duration_seconds = int((end_dt - start_dt).total_seconds())
 
-        light_s = parsed.light_sleep or 0
-        deep_s = parsed.deep_sleep or 0
-        rem_s = parsed.rem_sleep or 0
-        sleep_stages = (
-            self._parse_hypnogram(parsed.hypnogram, start_dt, end_dt)
-            if parsed.hypnogram and start_dt and end_dt
-            else None
-        )
-
-        record = EventRecordCreate(
-            id=sleep_id,
-            category="sleep",
-            type="sleep_session",
-            source_name="Polar",
-            device_model=parsed.device_id,
-            duration_seconds=duration_seconds,
-            start_datetime=start_dt,
-            end_datetime=end_dt,
-            provider=ProviderName.POLAR,
-            user_id=user_id,
-        )
-
-        detail = EventRecordDetailCreate(
-            record_id=sleep_id,
-            sleep_total_duration_minutes=(light_s + deep_s + rem_s) // 60,
-            sleep_time_in_bed_minutes=duration_seconds // 60 if duration_seconds else None,
-            sleep_deep_minutes=deep_s // 60,
-            sleep_light_minutes=light_s // 60,
-            sleep_rem_minutes=rem_s // 60,
-            sleep_awake_minutes=(parsed.total_interruption_duration or 0) // 60,
-            sleep_stages=sleep_stages,
-        )
-
-        score: HealthScoreCreate | None = None
-        if parsed.sleep_score is not None:
-            raw_components: dict[str, float | int | None] = {
-                "sleep_time": parsed.group_duration_score,
-                "long_interruptions": parsed.long_interruption_duration,
-                "continuity": parsed.continuity,
-                "actual_sleep": parsed.group_solidity_score,
-                "rem_sleep": parsed.rem_sleep,
-                "deep_sleep": parsed.deep_sleep,
-            }
-            components: dict[str, ScoreComponent] = {
-                k: ScoreComponent(value=v) for k, v in raw_components.items() if v is not None
-            }
-            score = HealthScoreCreate(
-                id=uuid4(),
-                user_id=user_id,
-                provider=ProviderName.POLAR,
-                category=HealthScoreCategory.SLEEP,
-                value=parsed.sleep_score,
-                recorded_at=start_dt,
-                components=components or None,
-                sleep_record_id=sleep_id,
+            light_s = parsed.light_sleep or 0
+            deep_s = parsed.deep_sleep or 0
+            rem_s = parsed.rem_sleep or 0
+            sleep_stages = (
+                self._parse_hypnogram(parsed.hypnogram, start_dt, end_dt)
+                if parsed.hypnogram
+                else None
             )
 
-        hr_samples = (
-            self._parse_sleep_hr_samples(parsed.heart_rate_samples, start_dt, user_id)
-            if parsed.heart_rate_samples
-            else []
-        )
+            record = EventRecordCreate(
+                id=sleep_id,
+                category="sleep",
+                type="sleep_session",
+                source_name="Polar",
+                device_model=parsed.device_id,
+                duration_seconds=duration_seconds,
+                start_datetime=start_dt,
+                end_datetime=end_dt,
+                provider=ProviderName.POLAR,
+                user_id=user_id,
+            )
+            detail = EventRecordDetailCreate(
+                record_id=sleep_id,
+                sleep_total_duration_minutes=(light_s + deep_s + rem_s) // 60,
+                sleep_time_in_bed_minutes=duration_seconds // 60 if duration_seconds else None,
+                sleep_deep_minutes=deep_s // 60,
+                sleep_light_minutes=light_s // 60,
+                sleep_rem_minutes=rem_s // 60,
+                sleep_awake_minutes=(parsed.total_interruption_duration or 0) // 60,
+                sleep_stages=sleep_stages,
+            )
 
-        return record, detail, score, hr_samples
+            score: HealthScoreCreate | None = None
+            if parsed.sleep_score is not None:
+                raw_components: dict[str, float | int | None] = {
+                    "sleep_time": parsed.group_duration_score,
+                    "long_interruptions": parsed.long_interruption_duration,
+                    "continuity": parsed.continuity,
+                    "actual_sleep": parsed.group_solidity_score,
+                    "rem_sleep": parsed.rem_sleep,
+                    "deep_sleep": parsed.deep_sleep,
+                }
+                components: dict[str, ScoreComponent] = {
+                    k: ScoreComponent(value=v) for k, v in raw_components.items() if v is not None
+                }
+                score = HealthScoreCreate(
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=ProviderName.POLAR,
+                    category=HealthScoreCategory.SLEEP,
+                    value=parsed.sleep_score,
+                    recorded_at=start_dt,
+                    components=components or None,
+                    sleep_record_id=sleep_id,
+                )
+
+            hr_samples = (
+                self._parse_sleep_hr_samples(parsed.heart_rate_samples, start_dt, user_id)
+                if parsed.heart_rate_samples
+                else []
+            )
+            results.append((record, detail, score, hr_samples))
+        return results
 
     # -------------------------------------------------------------------------
     # Daily Activity - GET /v3/users/activities
@@ -816,13 +818,13 @@ class Polar247Data(Base247DataTemplate):
         end_time: datetime,
     ) -> int:
         raw_items = self.get_sleep_data(db, user_id, start_time, end_time)
+        normalized = self.normalize_sleep(raw_items, user_id)
         count = 0
         scores: list[HealthScoreCreate] = []
         hr_samples: list[TimeSeriesSampleCreate] = []
 
-        for raw in raw_items:
+        for record, detail, score, hr in normalized:
             try:
-                record, detail, score, hr = self.normalize_sleep(raw, user_id)
                 event_record_service.create_or_merge_sleep(
                     db, user_id, record, detail, settings.sleep_end_gap_minutes
                 )
