@@ -41,9 +41,9 @@ from app.schemas.providers.polar.sleepwise.circadian_bedtime import CircadianBed
 from app.services.event_record_service import event_record_service
 from app.services.health_score_service import health_score_service
 from app.services.providers.api_client import make_authenticated_request
-from app.services.raw_payload_storage import store_raw_payload
 from app.services.providers.templates.base_247_data import Base247DataTemplate
 from app.services.providers.templates.base_oauth import BaseOAuthTemplate
+from app.services.raw_payload_storage import store_raw_payload
 from app.services.timeseries_service import timeseries_service
 from app.utils.structured_logging import log_structured
 
@@ -182,8 +182,9 @@ class Polar247Data(Base247DataTemplate):
         try:
             return schema.model_validate(raw)
         except ValidationError as e:
-            log_structured(self.logger, "warning", f"Polar {context} validation error: {e}",
-                           provider="polar", user_id=str(user_id))
+            log_structured(
+                self.logger, "warning", f"Polar {context} validation error: {e}", provider="polar", user_id=str(user_id)
+            )
             return None
 
     # -------------------------------------------------------------------------
@@ -192,7 +193,7 @@ class Polar247Data(Base247DataTemplate):
 
     def _get_available_sleep_dates(self, db: DbSession, user_id: UUID) -> set[date]:
         response = self._make_api_request(db, user_id, "/v3/users/sleep/available")
-        nights = response.get("nights", []) if isinstance(response, dict) else []
+        nights = (response or {}).get("available", [])
         return {date.fromisoformat(night["date"]) for night in nights if night.get("date")}
 
     def get_sleep_data(
@@ -259,7 +260,9 @@ class Polar247Data(Base247DataTemplate):
             for dt, bpm in self._hhmm_to_datetimes(hr_samples, sleep_start)
         ]
 
-    SleepNormalized = tuple[EventRecordCreate, EventRecordDetailCreate, HealthScoreCreate | None, list[TimeSeriesSampleCreate]]
+    SleepNormalized = tuple[
+        EventRecordCreate, EventRecordDetailCreate, HealthScoreCreate | None, list[TimeSeriesSampleCreate]
+    ]
 
     def normalize_sleep(  # type: ignore[override]
         self,
@@ -271,9 +274,13 @@ class Polar247Data(Base247DataTemplate):
             if (parsed := self._parse(raw, SleepJSON, user_id, "sleep")) is None:
                 continue
             if not parsed.sleep_start_time or not parsed.sleep_end_time:
-                log_structured(self.logger, "warning",
-                               f"Polar sleep record missing start/end time: {parsed.date}",
-                               provider="polar", user_id=str(user_id))
+                log_structured(
+                    self.logger,
+                    "warning",
+                    f"Polar sleep record missing start/end time: {parsed.date}",
+                    provider="polar",
+                    user_id=str(user_id),
+                )
                 continue
 
             sleep_id = uuid4()
@@ -284,18 +291,13 @@ class Polar247Data(Base247DataTemplate):
             light_s = parsed.light_sleep or 0
             deep_s = parsed.deep_sleep or 0
             rem_s = parsed.rem_sleep or 0
-            sleep_stages = (
-                self._parse_hypnogram(parsed.hypnogram, start_dt, end_dt)
-                if parsed.hypnogram
-                else None
-            )
+            sleep_stages = self._parse_hypnogram(parsed.hypnogram, start_dt, end_dt) if parsed.hypnogram else None
 
             record = EventRecordCreate(
                 id=sleep_id,
                 category="sleep",
                 type="sleep_session",
                 source_name="Polar",
-                device_model=parsed.device_id,
                 duration_seconds=duration_seconds,
                 start_datetime=start_dt,
                 end_datetime=end_dt,
@@ -386,21 +388,41 @@ class Polar247Data(Base247DataTemplate):
                 continue
             recorded_at = datetime.fromisoformat(parsed.start_time)
             if parsed.steps is not None:
-                samples.append(TimeSeriesSampleCreate(
-                    id=uuid4(), user_id=user_id, provider=ProviderName.POLAR, source=ProviderName.POLAR,
-                    recorded_at=recorded_at, value=parsed.steps, series_type=SeriesType.steps,
-                ))
+                samples.append(
+                    TimeSeriesSampleCreate(
+                        id=uuid4(),
+                        user_id=user_id,
+                        provider=ProviderName.POLAR,
+                        source=ProviderName.POLAR,
+                        recorded_at=recorded_at,
+                        value=parsed.steps,
+                        series_type=SeriesType.steps,
+                    )
+                )
             if parsed.active_calories is not None:
-                samples.append(TimeSeriesSampleCreate(
-                    id=uuid4(), user_id=user_id, provider=ProviderName.POLAR, source=ProviderName.POLAR,
-                    recorded_at=recorded_at, value=parsed.active_calories, series_type=SeriesType.energy,
-                ))
+                samples.append(
+                    TimeSeriesSampleCreate(
+                        id=uuid4(),
+                        user_id=user_id,
+                        provider=ProviderName.POLAR,
+                        source=ProviderName.POLAR,
+                        recorded_at=recorded_at,
+                        value=parsed.active_calories,
+                        series_type=SeriesType.energy,
+                    )
+                )
             if parsed.distance_from_steps is not None:
-                samples.append(TimeSeriesSampleCreate(
-                    id=uuid4(), user_id=user_id, provider=ProviderName.POLAR, source=ProviderName.POLAR,
-                    recorded_at=recorded_at, value=Decimal(str(parsed.distance_from_steps)),
-                    series_type=SeriesType.distance_walking_running,
-                ))
+                samples.append(
+                    TimeSeriesSampleCreate(
+                        id=uuid4(),
+                        user_id=user_id,
+                        provider=ProviderName.POLAR,
+                        source=ProviderName.POLAR,
+                        recorded_at=recorded_at,
+                        value=Decimal(str(parsed.distance_from_steps)),
+                        series_type=SeriesType.distance_walking_running,
+                    )
+                )
         return samples
 
     # -------------------------------------------------------------------------
@@ -439,8 +461,13 @@ class Polar247Data(Base247DataTemplate):
             samples_dict = {s.sample_time: s.heart_rate for s in parsed.heart_rate_samples if s.sample_time}
             samples.extend(
                 TimeSeriesSampleCreate(
-                    id=uuid4(), user_id=user_id, provider=ProviderName.POLAR, source=ProviderName.POLAR,
-                    recorded_at=dt, value=bpm, series_type=SeriesType.heart_rate,
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=ProviderName.POLAR,
+                    source=ProviderName.POLAR,
+                    recorded_at=dt,
+                    value=bpm,
+                    series_type=SeriesType.heart_rate,
                 )
                 for dt, bpm in self._hhmm_to_datetimes(samples_dict, anchor)
             )
@@ -487,19 +514,27 @@ class Polar247Data(Base247DataTemplate):
             }
             if parsed.cardio_load_level:
                 lvl = parsed.cardio_load_level
-                raw_components.update({
-                    "level_very_low": lvl.very_low,
-                    "level_low": lvl.low,
-                    "level_medium": lvl.medium,
-                    "level_high": lvl.high,
-                    "level_very_high": lvl.very_high,
-                })
+                raw_components.update(
+                    {
+                        "level_very_low": lvl.very_low,
+                        "level_low": lvl.low,
+                        "level_medium": lvl.medium,
+                        "level_high": lvl.high,
+                        "level_very_high": lvl.very_high,
+                    }
+                )
             components = {k: ScoreComponent(value=v) for k, v in raw_components.items() if v is not None}
-            scores.append(HealthScoreCreate(
-                id=uuid4(), user_id=user_id, provider=ProviderName.POLAR,
-                category=HealthScoreCategory.STRAIN, value=parsed.cardio_load,
-                recorded_at=datetime.fromisoformat(parsed.date), components=components or None,
-            ))
+            scores.append(
+                HealthScoreCreate(
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=ProviderName.POLAR,
+                    category=HealthScoreCategory.STRAIN,
+                    value=parsed.cardio_load,
+                    recorded_at=datetime.fromisoformat(parsed.date),
+                    components=components or None,
+                )
+            )
         return scores
 
     # -------------------------------------------------------------------------
@@ -542,12 +577,18 @@ class Polar247Data(Base247DataTemplate):
                     value=parsed.ans_charge_status,
                     qualifier=self._ANS_CHARGE_STATUS_LABELS.get(parsed.ans_charge_status),
                 )
-            scores.append(HealthScoreCreate(
-                id=uuid4(), user_id=user_id, provider=ProviderName.POLAR,
-                category=HealthScoreCategory.RECOVERY, value=parsed.nightly_recharge_status,
-                qualifier=self._NIGHTLY_RECHARGE_STATUS_LABELS.get(parsed.nightly_recharge_status),
-                recorded_at=datetime.fromisoformat(parsed.date), components=components or None,
-            ))
+            scores.append(
+                HealthScoreCreate(
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=ProviderName.POLAR,
+                    category=HealthScoreCategory.RECOVERY,
+                    value=parsed.nightly_recharge_status,
+                    qualifier=self._NIGHTLY_RECHARGE_STATUS_LABELS.get(parsed.nightly_recharge_status),
+                    recorded_at=datetime.fromisoformat(parsed.date),
+                    components=components or None,
+                )
+            )
         return scores
 
     # -------------------------------------------------------------------------
@@ -587,18 +628,25 @@ class Polar247Data(Base247DataTemplate):
                 components["grade_validity_seconds"] = ScoreComponent(value=parsed.grade_validity_seconds)
             if parsed.sleep_inertia is not None:
                 components["sleep_inertia"] = ScoreComponent(
-                    value=None, qualifier=self._SLEEP_INERTIA_LABELS.get(parsed.sleep_inertia),
+                    value=None,
+                    qualifier=self._SLEEP_INERTIA_LABELS.get(parsed.sleep_inertia),
                 )
             if parsed.sleep_type is not None:
                 components["sleep_type"] = ScoreComponent(value=None, qualifier=parsed.sleep_type.value)
-            scores.append(HealthScoreCreate(
-                id=uuid4(), user_id=user_id, provider=ProviderName.POLAR,
-                category=HealthScoreCategory.READINESS, value=parsed.grade,
-                qualifier=self._GRADE_CLASSIFICATION_LABELS.get(parsed.grade_classification)
-                if parsed.grade_classification else None,
-                recorded_at=datetime.fromisoformat(parsed.period_start_time),
-                components=components or None,
-            ))
+            scores.append(
+                HealthScoreCreate(
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=ProviderName.POLAR,
+                    category=HealthScoreCategory.READINESS,
+                    value=parsed.grade,
+                    qualifier=self._GRADE_CLASSIFICATION_LABELS.get(parsed.grade_classification)
+                    if parsed.grade_classification
+                    else None,
+                    recorded_at=datetime.fromisoformat(parsed.period_start_time),
+                    components=components or None,
+                )
+            )
         return scores
 
     # -------------------------------------------------------------------------
@@ -638,14 +686,18 @@ class Polar247Data(Base247DataTemplate):
                 components["sleep_gate_end"] = ScoreComponent(value=None, qualifier=parsed.sleep_gate_end_time)
             if parsed.result_type is not None and parsed.result_type != CircadianBedtimeResultType.UNKNOWN:
                 components["result_type"] = ScoreComponent(value=None, qualifier=parsed.result_type.value)
-            scores.append(HealthScoreCreate(
-                id=uuid4(), user_id=user_id, provider=ProviderName.POLAR,
-                category=HealthScoreCategory.SLEEP,
-                value=self._CIRCADIAN_QUALITY_VALUES.get(parsed.quality),
-                qualifier=self._CIRCADIAN_QUALITY_LABELS.get(parsed.quality),
-                recorded_at=datetime.fromisoformat(parsed.period_start_time),
-                components=components or None,
-            ))
+            scores.append(
+                HealthScoreCreate(
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=ProviderName.POLAR,
+                    category=HealthScoreCategory.SLEEP,
+                    value=self._CIRCADIAN_QUALITY_VALUES.get(parsed.quality),
+                    qualifier=self._CIRCADIAN_QUALITY_LABELS.get(parsed.quality),
+                    recorded_at=datetime.fromisoformat(parsed.period_start_time),
+                    components=components or None,
+                )
+            )
         return scores
 
     # -------------------------------------------------------------------------
@@ -680,9 +732,13 @@ class Polar247Data(Base247DataTemplate):
             anchor = datetime.fromisoformat(parsed.start_time)
             samples.extend(
                 TimeSeriesSampleCreate(
-                    id=uuid4(), user_id=user_id, provider=ProviderName.POLAR, source=ProviderName.POLAR,
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=ProviderName.POLAR,
+                    source=ProviderName.POLAR,
                     recorded_at=anchor + timedelta(milliseconds=s.recording_time_delta_milliseconds or 0),
-                    value=s.temperature_celsius, series_type=series_type,
+                    value=s.temperature_celsius,
+                    series_type=series_type,
                 )
                 for s in parsed.samples
                 if s.temperature_celsius is not None
@@ -717,17 +773,29 @@ class Polar247Data(Base247DataTemplate):
                 continue
             recorded_at = datetime.fromisoformat(parsed.sleep_date)
             if parsed.sleep_time_skin_temperature_celsius is not None:
-                samples.append(TimeSeriesSampleCreate(
-                    id=uuid4(), user_id=user_id, provider=ProviderName.POLAR, source=ProviderName.POLAR,
-                    recorded_at=recorded_at, value=parsed.sleep_time_skin_temperature_celsius,
-                    series_type=SeriesType.skin_temperature,
-                ))
+                samples.append(
+                    TimeSeriesSampleCreate(
+                        id=uuid4(),
+                        user_id=user_id,
+                        provider=ProviderName.POLAR,
+                        source=ProviderName.POLAR,
+                        recorded_at=recorded_at,
+                        value=parsed.sleep_time_skin_temperature_celsius,
+                        series_type=SeriesType.skin_temperature,
+                    )
+                )
             if parsed.deviation_from_baseline_celsius is not None:
-                samples.append(TimeSeriesSampleCreate(
-                    id=uuid4(), user_id=user_id, provider=ProviderName.POLAR, source=ProviderName.POLAR,
-                    recorded_at=recorded_at, value=parsed.deviation_from_baseline_celsius,
-                    series_type=SeriesType.skin_temperature_deviation,
-                ))
+                samples.append(
+                    TimeSeriesSampleCreate(
+                        id=uuid4(),
+                        user_id=user_id,
+                        provider=ProviderName.POLAR,
+                        source=ProviderName.POLAR,
+                        recorded_at=recorded_at,
+                        value=parsed.deviation_from_baseline_celsius,
+                        series_type=SeriesType.skin_temperature_deviation,
+                    )
+                )
         return samples
 
     # -------------------------------------------------------------------------
@@ -758,17 +826,29 @@ class Polar247Data(Base247DataTemplate):
                 continue
             recorded_at = datetime.fromtimestamp(parsed.test_time, tz=timezone.utc)
             if parsed.blood_oxygen_percent is not None:
-                samples.append(TimeSeriesSampleCreate(
-                    id=uuid4(), user_id=user_id, provider=ProviderName.POLAR, source=ProviderName.POLAR,
-                    recorded_at=recorded_at, value=parsed.blood_oxygen_percent,
-                    series_type=SeriesType.oxygen_saturation,
-                ))
+                samples.append(
+                    TimeSeriesSampleCreate(
+                        id=uuid4(),
+                        user_id=user_id,
+                        provider=ProviderName.POLAR,
+                        source=ProviderName.POLAR,
+                        recorded_at=recorded_at,
+                        value=parsed.blood_oxygen_percent,
+                        series_type=SeriesType.oxygen_saturation,
+                    )
+                )
             if parsed.heart_rate_variability_ms is not None:
-                samples.append(TimeSeriesSampleCreate(
-                    id=uuid4(), user_id=user_id, provider=ProviderName.POLAR, source=ProviderName.POLAR,
-                    recorded_at=recorded_at, value=parsed.heart_rate_variability_ms,
-                    series_type=SeriesType.heart_rate_variability_rmssd,
-                ))
+                samples.append(
+                    TimeSeriesSampleCreate(
+                        id=uuid4(),
+                        user_id=user_id,
+                        provider=ProviderName.POLAR,
+                        source=ProviderName.POLAR,
+                        recorded_at=recorded_at,
+                        value=parsed.heart_rate_variability_ms,
+                        series_type=SeriesType.heart_rate_variability_rmssd,
+                    )
+                )
         return samples
 
     # -------------------------------------------------------------------------
@@ -799,17 +879,29 @@ class Polar247Data(Base247DataTemplate):
                 continue
             recorded_at = datetime.fromtimestamp(parsed.test_time, tz=timezone.utc)
             if parsed.heart_rate_variability_ms is not None:
-                samples.append(TimeSeriesSampleCreate(
-                    id=uuid4(), user_id=user_id, provider=ProviderName.POLAR, source=ProviderName.POLAR,
-                    recorded_at=recorded_at, value=parsed.heart_rate_variability_ms,
-                    series_type=SeriesType.heart_rate_variability_rmssd,
-                ))
+                samples.append(
+                    TimeSeriesSampleCreate(
+                        id=uuid4(),
+                        user_id=user_id,
+                        provider=ProviderName.POLAR,
+                        source=ProviderName.POLAR,
+                        recorded_at=recorded_at,
+                        value=parsed.heart_rate_variability_ms,
+                        series_type=SeriesType.heart_rate_variability_rmssd,
+                    )
+                )
             if parsed.average_heart_rate_bpm is not None:
-                samples.append(TimeSeriesSampleCreate(
-                    id=uuid4(), user_id=user_id, provider=ProviderName.POLAR, source=ProviderName.POLAR,
-                    recorded_at=recorded_at, value=parsed.average_heart_rate_bpm,
-                    series_type=SeriesType.heart_rate,
-                ))
+                samples.append(
+                    TimeSeriesSampleCreate(
+                        id=uuid4(),
+                        user_id=user_id,
+                        provider=ProviderName.POLAR,
+                        source=ProviderName.POLAR,
+                        recorded_at=recorded_at,
+                        value=parsed.average_heart_rate_bpm,
+                        series_type=SeriesType.heart_rate,
+                    )
+                )
         return samples
 
     # -------------------------------------------------------------------------
@@ -841,9 +933,7 @@ class Polar247Data(Base247DataTemplate):
 
         for record, detail, score, hr in normalized:
             try:
-                event_record_service.create_or_merge_sleep(
-                    db, user_id, record, detail, settings.sleep_end_gap_minutes
-                )
+                event_record_service.create_or_merge_sleep(db, user_id, record, detail, settings.sleep_end_gap_minutes)
                 count += 1
                 if score:
                     scores.append(score)
@@ -885,36 +975,52 @@ class Polar247Data(Base247DataTemplate):
 
         tasks: dict[str, Callable[[], int]] = {
             "sleep": lambda: self._save_sleep(db, user_id, start_time, end_time),
-            "daily_activity": lambda: self._save_timeseries(db,
+            "daily_activity": lambda: self._save_timeseries(
+                db,
                 self.normalize_daily_activity(
-                    self.get_daily_activity_statistics(db, user_id, start_time, end_time), user_id)),
-            "continuous_hr": lambda: self._save_timeseries(db,
-                self.normalize_continuous_hr(
-                    self.get_continuous_hr_data(db, user_id, start_time, end_time), user_id)),
-            "cardio_load": lambda: self._save_scores(db,
-                self.normalize_cardio_load(
-                    self.get_cardio_load_data(db, user_id, start_time, end_time), user_id)),
-            "nightly_recharge": lambda: self._save_scores(db,
+                    self.get_daily_activity_statistics(db, user_id, start_time, end_time), user_id
+                ),
+            ),
+            "continuous_hr": lambda: self._save_timeseries(
+                db,
+                self.normalize_continuous_hr(self.get_continuous_hr_data(db, user_id, start_time, end_time), user_id),
+            ),
+            "cardio_load": lambda: self._save_scores(
+                db, self.normalize_cardio_load(self.get_cardio_load_data(db, user_id, start_time, end_time), user_id)
+            ),
+            "nightly_recharge": lambda: self._save_scores(
+                db,
                 self.normalize_nightly_recharge(
-                    self.get_nightly_recharge_data(db, user_id, start_time, end_time), user_id)),
-            "alertness": lambda: self._save_scores(db,
-                self.normalize_alertness(
-                    self.get_alertness_data(db, user_id, start_time, end_time), user_id)),
-            "circadian_bedtime": lambda: self._save_scores(db,
+                    self.get_nightly_recharge_data(db, user_id, start_time, end_time), user_id
+                ),
+            ),
+            "alertness": lambda: self._save_scores(
+                db, self.normalize_alertness(self.get_alertness_data(db, user_id, start_time, end_time), user_id)
+            ),
+            "circadian_bedtime": lambda: self._save_scores(
+                db,
                 self.normalize_circadian_bedtime(
-                    self.get_circadian_bedtime_data(db, user_id, start_time, end_time), user_id)),
-            "body_temperature": lambda: self._save_timeseries(db,
+                    self.get_circadian_bedtime_data(db, user_id, start_time, end_time), user_id
+                ),
+            ),
+            "body_temperature": lambda: self._save_timeseries(
+                db,
                 self.normalize_body_temperature(
-                    self.get_body_temperature_data(db, user_id, start_time, end_time), user_id)),
-            "sleep_skin_temperature": lambda: self._save_timeseries(db,
+                    self.get_body_temperature_data(db, user_id, start_time, end_time), user_id
+                ),
+            ),
+            "sleep_skin_temperature": lambda: self._save_timeseries(
+                db,
                 self.normalize_sleep_skin_temperature(
-                    self.get_sleep_skin_temperature_data(db, user_id, start_time, end_time), user_id)),
-            "spo2": lambda: self._save_timeseries(db,
-                self.normalize_spo2(
-                    self.get_spo2_data(db, user_id, start_time, end_time), user_id)),
-            "wrist_ecg": lambda: self._save_timeseries(db,
-                self.normalize_wrist_ecg(
-                    self.get_wrist_ecg_data(db, user_id, start_time, end_time), user_id)),
+                    self.get_sleep_skin_temperature_data(db, user_id, start_time, end_time), user_id
+                ),
+            ),
+            "spo2": lambda: self._save_timeseries(
+                db, self.normalize_spo2(self.get_spo2_data(db, user_id, start_time, end_time), user_id)
+            ),
+            "wrist_ecg": lambda: self._save_timeseries(
+                db, self.normalize_wrist_ecg(self.get_wrist_ecg_data(db, user_id, start_time, end_time), user_id)
+            ),
         }
 
         results: dict[str, int] = {}
