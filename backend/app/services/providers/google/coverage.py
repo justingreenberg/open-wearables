@@ -7,7 +7,7 @@ from app.services.providers.google.health_api.metrics import METRICS
 # Google data arrives through two paths under one provider identity:
 #   - Health Connect SDK: Android/HC metric types (RMSSD, not SDNN)
 #   - Health API cloud: series from the unified rollUp + list metric registry
-HEALTH_API_SERIES: frozenset[SeriesType] = frozenset(m.series_type for m in METRICS)
+HEALTH_API_SERIES: frozenset[SeriesType] = frozenset(s for m in METRICS for s in m.series_types())
 
 TIMESERIES: frozenset[SeriesType] = frozenset(
     {

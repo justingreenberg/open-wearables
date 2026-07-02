@@ -17,9 +17,6 @@ from app.utils.structured_logging import log_structured
 
 logger = logging.getLogger(__name__)
 
-# Google's OpenID Connect userinfo endpoint (requires openid/email scope).
-USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
-
 
 class GoogleOAuth(BaseOAuthTemplate):
     """Google OAuth 2.0 implementation (web server / authorization code flow).
@@ -32,6 +29,8 @@ class GoogleOAuth(BaseOAuthTemplate):
 
     use_pkce: bool = False
     auth_method: AuthenticationMethod = AuthenticationMethod.BODY
+
+    USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
     @property
     def endpoints(self) -> ProviderEndpoints:
@@ -80,7 +79,7 @@ class GoogleOAuth(BaseOAuthTemplate):
         """
         try:
             response = httpx.get(
-                USERINFO_URL,
+                self.USERINFO_URL,
                 headers={"Authorization": f"Bearer {token_response.access_token}"},
                 timeout=30.0,
             )

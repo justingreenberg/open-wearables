@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 from pydantic import AnyHttpUrl, Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.schemas.enums.data_granularity import DataGranularity
 from app.utils.config_utils import (
     EncryptedField,
     EnvironmentType,
@@ -106,6 +107,10 @@ class Settings(BaseSettings):
     # Whether to store raw FIT files in S3 when received via provider APIs.
     # Independent of ingest_workout_samples (DB samples) and raw_payload_storage (JSON payloads).
     store_fit_files: bool = False
+
+    # Default 24/7 data granularity (raw | hourly | daily) for providers that support it
+    # (Google Health), used when a provider has no explicit ProviderSetting.data_granularity.
+    default_data_granularity: DataGranularity = DataGranularity.RAW
 
     # SCORE SETTINGS
     score_backfill_days: int = 30  # How far back the missing-score query looks

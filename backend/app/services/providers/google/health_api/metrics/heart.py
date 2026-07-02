@@ -1,14 +1,15 @@
 """Heart-family metrics.
 
-heart-rate / run-vo2-max support rollUp + list; daily-resting-heart-rate and
-daily-heart-rate-variability are Daily types (list only). Google reports HRV as RMSSD.
+heart-rate / run-vo2-max support rollUp + list; daily-resting-heart-rate (Daily) and
+heart-rate-variability (Sample) are list only. The HRV sample emits both RMSSD (primary)
+and SDNN (extra) into their own series.
 
 heart-rate and run-vo2-max rollUp values also carry Min/Max alongside the Avg we take;
-capturing those would need dedicated SeriesTypes + the multi-series model (future).
+capturing those would use the same `extra` mechanism once dedicated SeriesTypes exist.
 """
 
 from app.schemas.enums import SeriesType
-from app.schemas.providers.google import DataTypeMetric, ListSpec, RollupSpec, TimeShape
+from app.schemas.providers.google import DataTypeMetric, ListSpec, RollupSpec, SeriesField, TimeShape
 
 HEART_METRICS: tuple[DataTypeMetric, ...] = (
     DataTypeMetric(
@@ -32,9 +33,13 @@ HEART_METRICS: tuple[DataTypeMetric, ...] = (
         list_spec=ListSpec("beatsPerMinute", TimeShape.DATE, is_daily_total=True),
     ),
     DataTypeMetric(
-        "daily-heart-rate-variability",
+        "heart-rate-variability",
         SeriesType.heart_rate_variability_rmssd,
-        value_key="dailyHeartRateVariability",
-        list_spec=ListSpec("averageHeartRateVariabilityMilliseconds", TimeShape.DATE, is_daily_total=True),
+        value_key="heartRateVariability",
+        list_spec=ListSpec(
+            "rootMeanSquareOfSuccessiveDifferencesMilliseconds",
+            TimeShape.SAMPLE,
+            extra=(SeriesField(SeriesType.heart_rate_variability_sdnn, "standardDeviationMilliseconds"),),
+        ),
     ),
 )

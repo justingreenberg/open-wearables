@@ -26,6 +26,20 @@ class TimeShape(Enum):
 
 
 @dataclass(frozen=True)
+class SeriesField:
+    """An additional (series, value) extracted from the same value object.
+
+    Lets one data type emit several series (e.g. an HRV sample yields both RMSSD and SDNN)
+    from a single fetch, beyond the spec's primary field.
+    """
+
+    series_type: SeriesType
+    field: str
+    subfield: str | None = None
+    scale: Decimal = Decimal(1)
+
+
+@dataclass(frozen=True)
 class RollupSpec:
     """How to read one data type's value from a dataPoints:rollUp response.
 
@@ -34,12 +48,14 @@ class RollupSpec:
                     ``millilitersSum``); None for the flat common case.
     scale:          unit factor applied to the value (e.g. 0.001 for mm→m).
     max_range_days: rollUp's per-request range cap (14 for heart-rate/total-calories, else 90).
+    extra:          additional series emitted from the same value object, if any.
     """
 
     field: str
     subfield: str | None = None
     scale: Decimal = Decimal(1)
     max_range_days: int = 90
+    extra: tuple[SeriesField, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +66,7 @@ class ListSpec:
     time:           where the data point carries its timestamp (record-type dependent).
     scale:          unit factor applied to the value.
     is_daily_total: True for once-per-day summaries (Daily types), False for raw samples.
+    extra:          additional series emitted from the same value object, if any.
     """
 
     field: str
@@ -57,6 +74,7 @@ class ListSpec:
     subfield: str | None = None
     scale: Decimal = Decimal(1)
     is_daily_total: bool = False
+    extra: tuple[SeriesField, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -85,3 +103,13 @@ class DataTypeMetric:
         if self.list_spec is None:
             return False
         return granularity == DataGranularity.RAW
+
+    def series_types(self) -> frozenset[SeriesType]:
+        """Every series this metric can emit — primary plus any extra bindings."""
+        extra = (
+            sf.series_type
+            for spec in (self.rollup_spec, self.list_spec)
+            if spec is not None and spec.extra
+            for sf in spec.extra
+        )
+        return frozenset({self.series_type, *extra})

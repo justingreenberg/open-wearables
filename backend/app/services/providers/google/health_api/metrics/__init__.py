@@ -7,7 +7,8 @@ from app.schemas.providers.google import DataTypeMetric
 from app.services.providers.google.health_api.metrics.activity import ACTIVITY_METRICS
 from app.services.providers.google.health_api.metrics.body import BODY_METRICS
 from app.services.providers.google.health_api.metrics.heart import HEART_METRICS
+from app.services.providers.google.health_api.metrics.vitals import VITALS_METRICS
 
-METRICS: tuple[DataTypeMetric, ...] = (*ACTIVITY_METRICS, *HEART_METRICS, *BODY_METRICS)
+METRICS: tuple[DataTypeMetric, ...] = (*ACTIVITY_METRICS, *HEART_METRICS, *BODY_METRICS, *VITALS_METRICS)
 
 __all__ = ["METRICS"]

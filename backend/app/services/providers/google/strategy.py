@@ -27,8 +27,8 @@ class GoogleStrategy(BaseProviderStrategy):
             provider_name=self.name,
             api_base_url=self.api_base_url,
         )
-        self.workouts = GoogleHealthApiWorkouts(self.workout_repo, self.connection_repo, self.oauth)
-        self.data_247 = GoogleHealth247Data(self.oauth, self.connection_repo)
+        self.workouts = GoogleHealthApiWorkouts(self.workout_repo, self.connection_repo, self.oauth, self.api_base_url)
+        self.data_247 = GoogleHealth247Data(self.oauth, self.connection_repo, self.api_base_url)
 
     @property
     def name(self) -> str:
@@ -40,7 +40,7 @@ class GoogleStrategy(BaseProviderStrategy):
 
     @property
     def api_base_url(self) -> str:
-        return ""  # Google Health Connect doesn't have a cloud API
+        return "https://health.googleapis.com"
 
     @property
     def capabilities(self) -> ProviderCapabilities:

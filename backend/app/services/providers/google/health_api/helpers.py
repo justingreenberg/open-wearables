@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.utils.dates import offset_to_iso
+
 
 def _to_rfc3339(dt: datetime) -> str:
     """RFC3339 UTC with a 'Z' suffix; naive datetimes are assumed UTC."""
@@ -26,6 +28,16 @@ def to_decimal(value: Any) -> Decimal | None:
         return None
 
 
+def as_int(value: Any) -> int | None:
+    """Coerce a value to int; None if missing or not convertible (e.g. NaN/Infinity)."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 def read_number(
     obj: dict[str, Any],
     field: str,
@@ -43,11 +55,37 @@ def read_number(
     return number * scale if number is not None else None
 
 
+def extract_source(data_source: Any) -> tuple[str, str | None]:
+    """Derive (source_name, device_model) from a list data point's dataSource.
+
+    device shapes vary: {displayName} (Fitbit), {manufacturer, formFactor} (Health
+    Connect), or empty/absent. device_model falls back displayName -> manufacturer
+    formFactor -> platform; source_name is the platform.
+    """
+    if not isinstance(data_source, dict):
+        return "Google Health", None
+    device = data_source.get("device") or {}
+    platform = data_source.get("platform")
+    device_model = (
+        device.get("displayName")
+        or " ".join(p for p in (device.get("manufacturer"), device.get("formFactor")) if p)
+        or platform
+        or None
+    )
+    return platform or "Google Health", device_model
+
+
 def parse_duration_seconds(value: str | None) -> Decimal | None:
     """Parse a Google Duration string (seconds ending in 's', e.g. ``1830s``) to seconds."""
     if not value:
         return None
     return to_decimal(value[:-1] if value.endswith("s") else value)
+
+
+def zone_offset_from(utc_offset: str | None) -> str | None:
+    """Convert a Google UTC-offset Duration ('7200s') to an ISO offset ('+02:00')."""
+    seconds = parse_duration_seconds(utc_offset)
+    return offset_to_iso(int(seconds)) if seconds is not None else None
 
 
 def parse_rfc3339(value: str | None) -> datetime | None:
@@ -58,6 +96,12 @@ def parse_rfc3339(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
+
+
+def parse_interval(interval: dict[str, Any] | None) -> tuple[datetime | None, datetime | None]:
+    """Parse an interval's ``startTime``/``endTime`` (RFC3339) into datetimes."""
+    interval = interval or {}
+    return parse_rfc3339(interval.get("startTime")), parse_rfc3339(interval.get("endTime"))
 
 
 def parse_date(obj: dict[str, Any] | None) -> datetime | None:

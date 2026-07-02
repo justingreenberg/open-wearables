@@ -4,6 +4,7 @@ from .aggregation_method import (
     daily_total_flag,
 )
 from .data_granularity import (
+    GRANULARITY_WINDOW_SECONDS,
     DataGranularity,
 )
 from .device_type import (
@@ -39,6 +40,7 @@ __all__ = [
     "AGGREGATION_METHOD_BY_TYPE",
     "daily_total_flag",
     "DataGranularity",
+    "GRANULARITY_WINDOW_SECONDS",
     "SeriesType",
     "SERIES_TYPE_DEFINITIONS",
     "SERIES_TYPE_ID_BY_ENUM",
