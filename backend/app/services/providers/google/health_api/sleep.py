@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from app.config import settings
+from app.constants.series_types.google.sleep_stages import GOOGLE_SLEEP_STAGE_MAP
 from app.constants.sleep import SleepStageType
 from app.database import DbSession
 from app.repositories.user_connection_repository import UserConnectionRepository
@@ -31,16 +32,6 @@ from app.services.providers.google.health_api.helpers import (
 )
 from app.services.providers.templates.base_oauth import BaseOAuthTemplate
 from app.services.raw_payload_storage import store_raw_payload
-
-# Google Sleep.SleepStageType -> unified SleepStageType.
-_STAGE_MAP: dict[str, SleepStageType] = {
-    "AWAKE": SleepStageType.AWAKE,
-    "LIGHT": SleepStageType.LIGHT,
-    "DEEP": SleepStageType.DEEP,
-    "REM": SleepStageType.REM,
-    "ASLEEP": SleepStageType.SLEEPING,
-    "RESTLESS": SleepStageType.UNKNOWN,
-}
 
 
 class GoogleHealthApiSleep:
@@ -172,7 +163,7 @@ class GoogleHealthApiSleep:
                 continue
             result.append(
                 SleepStage(
-                    stage=_STAGE_MAP.get(stage.get("type", ""), SleepStageType.UNKNOWN),
+                    stage=GOOGLE_SLEEP_STAGE_MAP.get(stage.get("type", ""), SleepStageType.UNKNOWN),
                     start_time=start,
                     end_time=end,
                 )

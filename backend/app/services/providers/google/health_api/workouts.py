@@ -1,8 +1,8 @@
 """Google Health API workouts handler.
 
 Fetches Exercise sessions via the dataPoints ``list`` operation and normalizes them to
-the unified EventRecord model. Exercise type mapping is deferred (all default to OTHER);
-device/source come from each record's ``dataSource``.
+the unified EventRecord model. Exercise.ExerciseType maps to the unified WorkoutType via
+``get_unified_google_workout_type``; device/source come from each record's ``dataSource``.
 """
 
 from datetime import datetime
@@ -10,10 +10,11 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
+from app.constants.workout_types import get_unified_google_workout_type
 from app.database import DbSession
 from app.repositories.event_record_repository import EventRecordRepository
 from app.repositories.user_connection_repository import UserConnectionRepository
-from app.schemas.enums import ProviderName, WorkoutType
+from app.schemas.enums import ProviderName
 from app.schemas.model_crud.activities import EventRecordCreate, EventRecordDetailCreate
 from app.services.event_record_service import event_record_service
 from app.services.providers.google.health_api.helpers import (
@@ -113,7 +114,7 @@ class GoogleHealthApiWorkouts(BaseWorkoutsTemplate):
         record = EventRecordCreate(
             id=workout_id,
             category="workout",
-            type=WorkoutType.OTHER.value,
+            type=get_unified_google_workout_type(exercise.get("exerciseType", "")).value,
             provider=ProviderName.GOOGLE.value,
             source="google",
             source_name=source_name,

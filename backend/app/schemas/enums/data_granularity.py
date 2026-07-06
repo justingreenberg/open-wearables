@@ -14,9 +14,9 @@ class DataGranularity(StrEnum):
     RAW = "raw"
 
 
-# Aggregation window (seconds) per aggregating granularity. RAW is intentionally absent —
-# it uses the raw list operation, not windowed aggregation. Add an entry here when adding
-# a granularity that aggregates.
+# Aggregation window (seconds) per aggregating granularity.
+# Raw is absent intentionally
+# Add an entry here when adding a granularity that aggregates.
 GRANULARITY_WINDOW_SECONDS: dict[DataGranularity, int] = {
     DataGranularity.DAILY: 86_400,
     DataGranularity.HOURLY: 3_600,
