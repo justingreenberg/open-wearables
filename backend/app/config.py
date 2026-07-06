@@ -189,6 +189,21 @@ class Settings(BaseSettings):
         "https://www.googleapis.com/auth/googlehealth.sleep.readonly "
         "https://www.googleapis.com/auth/googlehealth.settings.readonly"
     )
+    # Bearer secret Google echoes in the Authorization header of every webhook
+    # notification. Defaults to secret_key (see derive_google_webhook_secret).
+    google_webhook_secret: SecretStr | None = None
+    # GCP project that owns the Health API subscriber registration (subscribers live
+    # at the project level, not per-user). Required for programmatic registration.
+    google_project_id: str | None = None
+    # Path to the service-account JSON key used to authenticate project-level
+    # subscriber registration. If unset, Application Default Credentials are used.
+    google_service_account_file: str | None = None
+    # How native-resolution 24/7 data is fetched (only applies at RAW granularity;
+    # HOURLY/DAILY always use windowed rollUp). True = reconcile (one merged, deduplicated
+    # stream across all sources — matches the native health app, no per-device attribution).
+    # False = list (raw per-source points, keeps device attribution, overlapping sources
+    # stored separately and deduplicated on read).
+    google_use_reconcile: bool = True
 
     # EMAIL SETTINGS (Resend)
     resend_api_key: SecretStr | None = None
@@ -250,6 +265,12 @@ class Settings(BaseSettings):
             or self.oura_webhook_verification_token.get_secret_value() == ""
         ):
             self.oura_webhook_verification_token = SecretStr(self.secret_key)
+        return self
+
+    @model_validator(mode="after")
+    def derive_google_webhook_secret(self) -> "Settings":
+        if self.google_webhook_secret is None or self.google_webhook_secret.get_secret_value() == "":
+            self.google_webhook_secret = SecretStr(self.secret_key)
         return self
 
     @field_validator("cors_origins", mode="after")

@@ -31,6 +31,7 @@ class GoogleOAuth(BaseOAuthTemplate):
     auth_method: AuthenticationMethod = AuthenticationMethod.BODY
 
     USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+    IDENTITY_ENDPOINT = "/v4/users/me/identity"
 
     @property
     def endpoints(self) -> ProviderEndpoints:
@@ -71,31 +72,32 @@ class GoogleOAuth(BaseOAuthTemplate):
         return f"{self.endpoints.authorize_url}?{urlencode(params)}", None
 
     def _get_provider_user_info(self, token_response: OAuthTokenResponse, user_id: str) -> dict[str, str | None]:
-        """Fetch the user's Google account id (sub) and email from the userinfo endpoint.
+        """Resolve the Google Health API user id (healthUserId) and email.
 
-        Best-effort: if the granted scopes don't include ``openid``/``email`` or
-        the request fails, fall back to no provider user info rather than failing
-        the whole connection.
+        ``healthUserId`` is the stable id Google puts in webhook notifications, so we
+        store it as the connection's ``provider_user_id`` to map inbound pings back to
+        this user. Email (OIDC userinfo) is best-effort, for display only. Both calls
+        are best-effort so a scope/permission gap never fails the whole connection.
         """
+        headers = {"Authorization": f"Bearer {token_response.access_token}"}
+        return {
+            "user_id": self._fetch(f"{self.api_base_url}{self.IDENTITY_ENDPOINT}", headers, "healthUserId", user_id),
+            "username": self._fetch(self.USERINFO_URL, headers, "email", user_id),
+        }
+
+    def _fetch(self, url: str, headers: dict[str, str], field: str, user_id: str) -> str | None:
+        """GET ``url`` and return ``field`` from the JSON body; None on any failure."""
         try:
-            response = httpx.get(
-                self.USERINFO_URL,
-                headers={"Authorization": f"Bearer {token_response.access_token}"},
-                timeout=30.0,
-            )
+            response = httpx.get(url, headers=headers, timeout=30.0)
             response.raise_for_status()
-            data = response.json()
-            return {
-                "user_id": data.get("sub"),
-                "username": data.get("email"),
-            }
+            return response.json().get(field)
         except Exception as e:
             log_structured(
                 logger,
                 "warning",
-                f"Failed to fetch Google user info: {e}",
+                f"Failed to fetch Google {field}: {e}",
                 provider=self.provider_name,
                 task="get_provider_user_info",
                 user_id=user_id,
             )
-            return {"user_id": None, "username": None}
+            return None

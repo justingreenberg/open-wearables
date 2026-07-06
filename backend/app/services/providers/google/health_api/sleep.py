@@ -30,6 +30,7 @@ from app.services.providers.google.health_api.helpers import (
     zone_offset_from,
 )
 from app.services.providers.templates.base_oauth import BaseOAuthTemplate
+from app.services.raw_payload_storage import store_raw_payload
 
 # Google Sleep.SleepStageType -> unified SleepStageType.
 _STAGE_MAP: dict[str, SleepStageType] = {
@@ -88,6 +89,13 @@ class GoogleHealthApiSleep:
                 endpoint=self.LIST_ENDPOINT,
                 method="GET",
                 params=params,
+            )
+            store_raw_payload(
+                source="api_response",
+                provider=self.provider_name,
+                payload=response,
+                user_id=str(user_id),
+                trace_id=self.LIST_ENDPOINT,
             )
             if not isinstance(response, dict):
                 break

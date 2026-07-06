@@ -27,6 +27,7 @@ from app.services.providers.google.health_api.helpers import (
 )
 from app.services.providers.templates.base_oauth import BaseOAuthTemplate
 from app.services.providers.templates.base_workouts import BaseWorkoutsTemplate
+from app.services.raw_payload_storage import store_raw_payload
 
 _MM_TO_M = Decimal("0.001")
 
@@ -75,6 +76,13 @@ class GoogleHealthApiWorkouts(BaseWorkoutsTemplate):
             if page_token:
                 params["pageToken"] = page_token
             response = self._make_api_request(db, user_id, self.LIST_ENDPOINT, method="GET", params=params)
+            store_raw_payload(
+                source="api_response",
+                provider="google",
+                payload=response,
+                user_id=str(user_id),
+                trace_id=self.LIST_ENDPOINT,
+            )
             if not isinstance(response, dict):
                 break
             points.extend(response.get("dataPoints", []))

@@ -2,6 +2,8 @@ from app.services.providers.base_strategy import BaseProviderStrategy, ProviderC
 from app.services.providers.google.coverage import HEALTH_SCORES, SLEEP_FIELDS, TIMESERIES, WORKOUT_FIELDS
 from app.services.providers.google.health_api.data_247 import GoogleHealth247Data
 from app.services.providers.google.health_api.oauth import GoogleOAuth
+from app.services.providers.google.health_api.webhook_handler import GoogleWebhookHandler
+from app.services.providers.google.health_api.webhook_service import GoogleWebhookService
 from app.services.providers.google.health_api.workouts import GoogleHealthApiWorkouts
 
 
@@ -29,6 +31,8 @@ class GoogleStrategy(BaseProviderStrategy):
         )
         self.workouts = GoogleHealthApiWorkouts(self.workout_repo, self.connection_repo, self.oauth, self.api_base_url)
         self.data_247 = GoogleHealth247Data(self.oauth, self.connection_repo, self.api_base_url)
+        self.webhooks = GoogleWebhookHandler(self.data_247, self.workouts)
+        self.webhook_service = GoogleWebhookService()
 
     @property
     def name(self) -> str:
@@ -45,8 +49,14 @@ class GoogleStrategy(BaseProviderStrategy):
     @property
     def capabilities(self) -> ProviderCapabilities:
         # Hybrid: Health Connect via the mobile SDK + the Google Health API cloud
-        # rollups polled over REST (drives the periodic 24/7 sync).
-        return ProviderCapabilities(client_sdk=True, rest_pull=True)
+        # rollups polled over REST. Health API delivers notify-only webhook pings
+        # (fetched via REST); subscriber registration goes through the service account.
+        return ProviderCapabilities(
+            client_sdk=True,
+            rest_pull=True,
+            webhook_ping=True,
+            webhook_registration_api=True,
+        )
 
     @property
     def coverage(self) -> ProviderCoverage:

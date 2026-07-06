@@ -1,9 +1,11 @@
 """Google Health API 24/7 handler.
 
-Drives both Google fetch operations from one registry: ``dataPoints:rollUp`` (windowed
-aggregates) and ``dataPoints`` list (raw points). The operation + window per data type
-follow the provider's configured granularity (DAILY/HOURLY/RAW), defaulting to DAILY.
-Sleep and workouts come from the sessions endpoint and are handled separately.
+Drives Google's fetch operations from one registry. Granularity (default RAW) picks the
+tier: DAILY/HOURLY use ``dataPoints:rollUp`` (windowed aggregates); RAW uses a
+native-resolution operation chosen by ``google_use_reconcile`` — ``dataPoints:reconcile``
+(one merged, deduplicated stream across sources, matching the native health app) or
+``dataPoints`` list (raw per-source points with device attribution). Sleep and workouts
+come from the sessions endpoint and are handled separately.
 """
 
 from collections.abc import Iterator
@@ -22,6 +24,7 @@ from app.schemas.model_crud.activities import TimeSeriesSampleCreate
 from app.schemas.providers.google import DataTypeMetric, ListSpec, RollupSpec, TimeShape
 from app.services.providers.api_client import make_authenticated_request
 from app.services.providers.google.health_api.helpers import (
+    extract_source,
     parse_date,
     parse_rfc3339,
     physical_interval,
@@ -32,6 +35,7 @@ from app.services.providers.google.health_api.metrics import METRICS
 from app.services.providers.google.health_api.sleep import GoogleHealthApiSleep
 from app.services.providers.templates.base_247_data import Base247DataTemplate
 from app.services.providers.templates.base_oauth import BaseOAuthTemplate
+from app.services.raw_payload_storage import store_raw_payload
 from app.services.timeseries_service import timeseries_service
 from app.utils.sentry_helpers import log_and_capture_error
 from app.utils.structured_logging import log_structured
@@ -42,6 +46,7 @@ class GoogleHealth247Data(Base247DataTemplate):
 
     ROLLUP_ENDPOINT = "/v4/users/me/dataTypes/{data_type}/dataPoints:rollUp"
     LIST_ENDPOINT = "/v4/users/me/dataTypes/{data_type}/dataPoints"
+    RECONCILE_ENDPOINT = "/v4/users/me/dataTypes/{data_type}/dataPoints:reconcile"
     # rollUp enforces windowSize * pageSize <= the data type's max range; list default page.
     MAX_PAGE_SIZE = 10_000
     LIST_PAGE_SIZE = 1_000
@@ -71,7 +76,7 @@ class GoogleHealth247Data(Base247DataTemplate):
         for metric in METRICS:
             try:
                 if metric.use_list(granularity):
-                    samples = self._list_samples(db, user_id, metric, start_time, end_time)
+                    samples = self._native_samples(db, user_id, metric, start_time, end_time)
                 else:
                     samples = self._rollup_samples(db, user_id, metric, start_time, end_time, granularity)
             except Exception as e:
@@ -100,6 +105,36 @@ class GoogleHealth247Data(Base247DataTemplate):
             sleep_sessions=sleep_count,
         )
         return results
+
+    def sync_data_type(
+        self,
+        db: DbSession,
+        user_id: UUID,
+        data_type: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> WriteCounts | None:
+        """Fetch + persist a single 24/7 metric over an explicit window (webhook-triggered).
+
+        Returns None when ``data_type`` is not a registered metric. Sleep and exercise
+        are owned by their own handlers and are routed there by the webhook handler
+        before ever reaching here, so an unrecognised type is a safe no-op.
+        """
+        metric = next((m for m in METRICS if m.data_type == data_type), None)
+        if metric is None:
+            return None
+        granularity = (
+            self.settings_repo.get_data_granularity(db, self.provider_name) or settings.default_data_granularity
+        )
+        if metric.use_list(granularity):
+            samples = self._native_samples(db, user_id, metric, start_time, end_time)
+        else:
+            samples = self._rollup_samples(db, user_id, metric, start_time, end_time, granularity)
+        if not samples:
+            return None
+        counts = timeseries_service.bulk_create_samples(db, samples)
+        db.commit()
+        return counts
 
     def _log_metric_failure(self, data_type: str, user_id: UUID, error: Exception) -> None:
         log_and_capture_error(
@@ -178,6 +213,13 @@ class GoogleHealth247Data(Base247DataTemplate):
                 method="POST",
                 json_data=body,
             )
+            store_raw_payload(
+                source="api_response",
+                provider=self.provider_name,
+                payload=response,
+                user_id=str(user_id),
+                trace_id=endpoint,
+            )
             if not isinstance(response, dict):
                 break
             points.extend(response.get("rollupDataPoints", []))
@@ -196,9 +238,9 @@ class GoogleHealth247Data(Base247DataTemplate):
             yield cursor, nxt
             cursor = nxt
 
-    # -- list operation --------------------------------------------------------
+    # -- native-resolution operation (reconcile / list) ------------------------
 
-    def _list_samples(
+    def _native_samples(
         self,
         db: DbSession,
         user_id: UUID,
@@ -206,27 +248,39 @@ class GoogleHealth247Data(Base247DataTemplate):
         start_time: datetime,
         end_time: datetime,
     ) -> list[TimeSeriesSampleCreate]:
-        """List raw data points and map those within the sync window to samples.
+        """Fetch native-resolution points and map those within the sync window to samples.
 
-        list has no range parameter, so we filter client-side on each point's startTime.
+        Picks the operation per ``google_use_reconcile``: reconcile returns one merged,
+        deduplicated stream across all sources (no dataSource, so no device attribution);
+        list returns raw per-source points that carry a dataSource we attribute a device from.
+        Both share the union-key payload shape, timestamp shapes, and client-side windowing —
+        neither takes a range parameter, so we filter on each point's timestamp.
         """
         spec = metric.list_spec
         if spec is None:
             return []
+        reconcile = settings.google_use_reconcile
+        template = self.RECONCILE_ENDPOINT if reconcile else self.LIST_ENDPOINT
+        endpoint = template.format(data_type=metric.data_type)
+
         samples: list[TimeSeriesSampleCreate] = []
-        for point in self._fetch_list(db, user_id, metric.data_type):
-            # A list DataPoint nests its payload under the type's union key.
+        for point in self._fetch_points(db, user_id, endpoint):
+            # Both operations nest the payload under the type's union key.
             value_obj = point.get(metric.value_key)
             if not isinstance(value_obj, dict):
                 continue
             recorded_at, zone_offset = self._point_time(value_obj, spec.time)
             if recorded_at is None or not (start_time <= recorded_at < end_time):
                 continue
+            # Only list points carry a dataSource; reconciled points are already merged.
+            device_model = None if reconcile else extract_source(point.get("dataSource"))[1]
             for series_type, field, subfield, scale in self._bindings(metric.series_type, spec):
                 value = read_number(value_obj, field, subfield, scale)
                 if value is not None:
                     samples.append(
-                        self._sample(user_id, recorded_at, value, series_type, spec.is_daily_total, zone_offset)
+                        self._sample(
+                            user_id, recorded_at, value, series_type, spec.is_daily_total, zone_offset, device_model
+                        )
                     )
         return samples
 
@@ -254,9 +308,11 @@ class GoogleHealth247Data(Base247DataTemplate):
             case TimeShape.DATE:
                 return parse_date(point.get("date")), None
 
-    def _fetch_list(self, db: DbSession, user_id: UUID, data_type: str) -> list[dict[str, Any]]:
-        """GET dataPoints for one list data type, following pageToken."""
-        endpoint = self.LIST_ENDPOINT.format(data_type=data_type)
+    def _fetch_points(self, db: DbSession, user_id: UUID, endpoint: str) -> list[dict[str, Any]]:
+        """GET a native-resolution endpoint (list or reconcile), following pageToken.
+
+        Both return their points under ``dataPoints`` and paginate identically.
+        """
         points: list[dict[str, Any]] = []
         page_token: str | None = None
         while True:
@@ -274,6 +330,13 @@ class GoogleHealth247Data(Base247DataTemplate):
                 method="GET",
                 params=params,
             )
+            store_raw_payload(
+                source="api_response",
+                provider=self.provider_name,
+                payload=response,
+                user_id=str(user_id),
+                trace_id=endpoint,
+            )
             if not isinstance(response, dict):
                 break
             points.extend(response.get("dataPoints", []))
@@ -290,12 +353,14 @@ class GoogleHealth247Data(Base247DataTemplate):
         series_type: SeriesType,
         is_daily_total: bool,
         zone_offset: str | None = None,
+        device_model: str | None = None,
     ) -> TimeSeriesSampleCreate:
         return TimeSeriesSampleCreate(
             id=uuid4(),
             user_id=user_id,
             source=self.provider_name,
             provider=self.provider_name,
+            device_model=device_model,
             recorded_at=recorded_at,
             zone_offset=zone_offset,
             value=value,
