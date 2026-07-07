@@ -102,9 +102,7 @@ def _error_result(subscription_id: str, action: str, error: httpx.HTTPError) -> 
         response_body=response_body,
     )
     return WebhookOperationResult(
-        subscription_id=subscription_id,
-        status=WebhookSubscriptionStatus.ERROR,
-        error=str(error)
+        subscription_id=subscription_id, status=WebhookSubscriptionStatus.ERROR, error=str(error)
     )
 
 
