@@ -72,16 +72,20 @@ class GoogleHealth247Data(Base247DataTemplate):
         results: dict[str, WriteCounts] = {}
 
         for metric in METRICS:
+            # Confine each metric (fetch + write) to a savepoint so a failed write rolls
+            # back only that metric and leaves the transaction usable for the rest.
             try:
-                if metric.use_list(granularity):
-                    samples = self._native_samples(db, user_id, metric, start_time, end_time)
-                else:
-                    samples = self._rollup_samples(db, user_id, metric, start_time, end_time, granularity)
+                with db.begin_nested():
+                    if metric.use_list(granularity):
+                        samples = self._native_samples(db, user_id, metric, start_time, end_time)
+                    else:
+                        samples = self._rollup_samples(db, user_id, metric, start_time, end_time, granularity)
+                    counts = timeseries_service.bulk_create_samples(db, samples) if samples else None
             except Exception as e:
                 self._log_metric_failure(metric.data_type, user_id, e)
                 continue
-            if samples:
-                results[metric.data_type] = timeseries_service.bulk_create_samples(db, samples)
+            if counts is not None:
+                results[metric.data_type] = counts
 
         try:
             sleep_count = self.sleep.load_and_save(db, user_id, start_time, end_time)
