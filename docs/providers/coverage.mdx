@@ -22,7 +22,7 @@ This guide gives an overview of data type support across the integrated wearable
 | **Workouts** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ |
 | **Sleep** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | 🔜 | ✅ |
 | **24/7 Data** | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ | ✅ | ❌ | 🔜 | ✅ |
-| **Timeseries** | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ❌ | 🔜 | ✅ |
+| **Timeseries** | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ◐ | 🔜 | ✅ |
 | **Health Scores** | ❌ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Women's Health** | 🔜 | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 🔜 |
 
@@ -47,7 +47,7 @@ This guide gives an overview of data type support across the integrated wearable
 
 | Data Type | Unit | Apple | Garmin | Polar | Suunto | Oura | Whoop | Ultrahuman | Strava | Fitbit | Health Connect |
 |-----------|------|:-----:|:------:|:-----:|:------:|:----:|:-----:|:----------:|:------:|:------:|:--------------:|
-| `heart_rate` | bpm | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ❌ | 🔜 | ✅ |
+| `heart_rate` | bpm | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ◐ | 🔜 | ✅ |
 | `resting_heart_rate` | bpm | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | 🔜 | ❌ | 🔜 | ✅ |
 | `heart_rate_variability_sdnn` | ms | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
 | `heart_rate_variability_rmssd` | ms | ❌ | ✅ | ◐ | ✅ | ✅ | ✅ | ❌ | ❌ | 🔜 | ✅ |
@@ -145,8 +145,8 @@ This guide gives an overview of data type support across the integrated wearable
 | Data Type | Unit | Apple | Garmin | Polar | Suunto | Oura | Whoop | Ultrahuman | Strava | Fitbit | Health Connect |
 |-----------|------|:-----:|:------:|:-----:|:------:|:----:|:-----:|:----------:|:------:|:------:|:--------------:|
 | `swimming_stroke_count` | count | ✅ | ❌ | ◐ | ◐ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| `cadence` | rpm | ❌ | ❌ | ◐ | ◐ | ❌ | ❌ | ❌ | ❌ | ❌ | 🔜 |
-| `power` | watts | ❌ | ❌ | ◐ | ◐ | ❌ | ❌ | ❌ | ❌ | ❌ | 🔜 |
+| `cadence` | rpm | ❌ | ❌ | ◐ | ◐ | ❌ | ❌ | ❌ | ◐ | ❌ | 🔜 |
+| `power` | watts | ❌ | ❌ | ◐ | ◐ | ❌ | ❌ | ❌ | ◐ | ❌ | 🔜 |
 | `speed` | m/s | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 🔜 |
 
 ### Provider-Specific Metrics
@@ -398,6 +398,7 @@ Key differences and limitations to be aware of when working with each provider:
   - Real-time webhook notifications for new and updated activities
   - 50+ sport type mappings to unified taxonomy (SportType) plus legacy ActivityType support
   - Workout metrics include: avg/max heart rate, distance, avg/max speed, avg/max watts, elevation (gain/high/low), calories, moving time, device name
+  - Per-sample workout streams (heart rate, speed, cadence, power) ingested as `/timeseries` data when `ingest_workout_samples` is enabled — scoped to workouts only, not continuous 24/7
   - Calories fall back to kilojoules when calorie data is not available from the API
   - Only one webhook subscription allowed per application
   - Webhook must respond with HTTP 200 within 2 seconds; retries up to 3 times on failure
