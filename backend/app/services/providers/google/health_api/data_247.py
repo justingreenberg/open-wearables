@@ -255,8 +255,9 @@ class GoogleHealth247Data(Base247DataTemplate):
         Picks the operation per ``google_use_reconcile``: reconcile returns one merged,
         deduplicated stream across all sources (no dataSource, so no device attribution);
         list returns raw per-source points that carry a dataSource we attribute a device from.
-        Both share the union-key payload shape, timestamp shapes, and client-side windowing —
-        neither takes a range parameter, so we filter on each point's timestamp.
+        Both share the union-key payload shape and timestamp shapes; the fetch is bounded to
+        the window server-side via the AIP-160 filter, and the client-side check below is the
+        precise gate.
         """
         spec = metric.list_spec
         if spec is None:
@@ -264,9 +265,10 @@ class GoogleHealth247Data(Base247DataTemplate):
         reconcile = settings.google_use_reconcile
         template = RECONCILE_ENDPOINT if reconcile else LIST_ENDPOINT
         endpoint = template.format(data_type=metric.data_type)
+        time_filter = self._time_filter(metric.data_type, spec.time, start_time, end_time)
 
         samples: list[TimeSeriesSampleCreate] = []
-        for point in self._fetch_points(db, user_id, endpoint):
+        for point in self._fetch_points(db, user_id, endpoint, time_filter):
             # Both operations nest the payload under the type's union key.
             value_obj = point.get(metric.value_key)
             if not isinstance(value_obj, dict):
@@ -310,7 +312,24 @@ class GoogleHealth247Data(Base247DataTemplate):
             case TimeShape.DATE:
                 return parse_date(point.get("date")), None
 
-    def _fetch_points(self, db: DbSession, user_id: UUID, endpoint: str) -> list[dict[str, Any]]:
+    @staticmethod
+    def _time_filter(data_type: str, shape: TimeShape, start_time: datetime, end_time: datetime) -> str:
+        """AIP-160 filter bounding the fetch to [start_time, end_time) for the type's time shape."""
+        field = data_type.replace("-", "_")
+        if shape == TimeShape.DATE:
+            member = f"{field}.date"
+            low = start_time.date().isoformat()
+            high = (end_time.date() + timedelta(days=1)).isoformat()
+        else:
+            suffix = "interval.start_time" if shape == TimeShape.INTERVAL else "sample_time.physical_time"
+            member = f"{field}.{suffix}"
+            window = physical_interval(start_time, end_time)
+            low, high = window["startTime"], window["endTime"]
+        return f'{member} >= "{low}" AND {member} < "{high}"'
+
+    def _fetch_points(
+        self, db: DbSession, user_id: UUID, endpoint: str, time_filter: str | None = None
+    ) -> list[dict[str, Any]]:
         """GET a native-resolution endpoint (list or reconcile), following pageToken.
 
         Both return their points under ``dataPoints`` and paginate identically.
@@ -319,6 +338,8 @@ class GoogleHealth247Data(Base247DataTemplate):
         page_token: str | None = None
         while True:
             params: dict[str, Any] = {"pageSize": self.LIST_PAGE_SIZE}
+            if time_filter:
+                params["filter"] = time_filter
             if page_token:
                 params["pageToken"] = page_token
             response = make_authenticated_request(

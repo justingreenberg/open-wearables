@@ -43,6 +43,7 @@ from app.services.providers.google.health_api.data_247 import GoogleHealth247Dat
 from app.services.providers.google.health_api.workouts import GoogleHealthApiWorkouts
 from app.services.providers.templates.base_webhook_handler import BaseWebhookHandler
 from app.services.raw_payload_storage import store_raw_payload
+from app.utils.sentry_helpers import log_and_capture_error
 from app.utils.structured_logging import log_structured
 
 logger = logging.getLogger(__name__)
@@ -166,7 +167,18 @@ class GoogleWebhookHandler(BaseWebhookHandler):
     def process_payload(self, db: DbSession, payload: dict[str, Any] | list[Any], trace_id: str) -> dict[str, Any]:
         """Process one notification or a batch; Google sends data notifications as an array."""
         items = payload if isinstance(payload, list) else [payload]
-        results = [self._process_one(db, item, trace_id) for item in items]
+        results: list[dict[str, Any]] = []
+        for item in items:
+            try:
+                results.append(self._process_one(db, item, trace_id))
+            except Exception as e:
+                log_and_capture_error(
+                    e,
+                    logger,
+                    f"Google webhook notification failed: {e}",
+                    extra={"provider": "google", "trace_id": trace_id},
+                )
+                results.append({"status": "error", "error": str(e)})
         records = sum(int(r.get("records_saved") or 0) for r in results)
         return {"status": "processed", "notifications": len(items), "records_saved": records, "results": results}
 
