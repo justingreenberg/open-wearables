@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from typing import TypedDict
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -8,13 +9,35 @@ from app.schemas.utils import SourceMetadata
 from app.utils.dates import ZoneOffset
 
 
+class TimeSeriesSourceMetadata(SourceMetadata):
+    """Stored provenance for one time-series sample."""
+
+    source: str | None = None
+    device_type: str | None = None
+    software_version: str | None = None
+    original_source_name: str | None = None
+
+
+class TimeSeriesSyncMetadata(BaseModel):
+    """Persisted connection state associated with a sample's data source."""
+
+    connection_id: UUID
+    connection_status: str
+    last_synced_at: datetime | None = None
+
+
 class TimeSeriesSample(BaseModel):
+    record_id: UUID
+    external_id: str | None = None
+    data_source_id: UUID
+    provider: str
     timestamp: datetime
     zone_offset: ZoneOffset = None
     type: SeriesType
     value: float | int
     unit: str
-    source: SourceMetadata | None = None
+    source: TimeSeriesSourceMetadata
+    sync: TimeSeriesSyncMetadata | None = None
     # True = daily total. False/None = not a daily total (summable sample); None is a
     # legacy row and is treated as False by the aggregation.
     is_daily_total: bool | None = None

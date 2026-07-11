@@ -8,7 +8,7 @@ MCP (Model Context Protocol) server for Open Wearables, enabling AI assistants l
 - **get_activity_summary**: Get daily activity data (steps, calories, heart rate, intensity minutes)
 - **get_sleep_summary**: Get sleep data for a user within a date range
 - **get_workout_events**: Get workout/exercise sessions for a user within a date range
-- **get_timeseries**: Get granular time-series samples (weight, SpO2, HRV, intraday heart rate, etc.)
+- **get_timeseries**: Get granular time-series samples with stable record/source IDs, device provenance, and persisted sync state (weight, SpO2, HRV, intraday heart rate, etc.)
 
 ## Prerequisites
 

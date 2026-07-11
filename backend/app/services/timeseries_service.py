@@ -24,10 +24,13 @@ from app.schemas.model_crud.activities import (
     TimeSeriesSampleUpdate,
 )
 from app.schemas.responses.activity import TimeSeriesSample
+from app.schemas.responses.activity.data_point_responses import (
+    TimeSeriesSourceMetadata,
+    TimeSeriesSyncMetadata,
+)
 from app.schemas.utils import (
     PaginatedResponse,
     Pagination,
-    SourceMetadata,
     TimeseriesMetadata,
 )
 from app.services.outgoing_webhooks import svix as svix_service
@@ -181,25 +184,39 @@ class TimeSeriesService(
 
         # Map to response format
         data = []
-        for sample, data_source in samples:
+        for sample, data_source, user_connection in samples:
             series_type = get_series_type_from_id(sample.series_type_definition_id)
             unit = get_series_type_unit(series_type)
 
-            # Build source from data source info if available
-            source = None
-            if data_source:
-                source = SourceMetadata(
-                    provider=data_source.source or "unknown",
-                    device=data_source.device_model,
+            provider = getattr(data_source.provider, "value", data_source.provider)
+            source = TimeSeriesSourceMetadata(
+                provider=provider,
+                source=data_source.source,
+                device=data_source.device_model,
+                device_type=data_source.device_type,
+                software_version=data_source.software_version,
+                original_source_name=data_source.original_source_name,
+            )
+            sync = None
+            if user_connection:
+                sync = TimeSeriesSyncMetadata(
+                    connection_id=user_connection.id,
+                    connection_status=getattr(user_connection.status, "value", user_connection.status),
+                    last_synced_at=user_connection.last_synced_at,
                 )
 
             item = TimeSeriesSample(
+                record_id=sample.id,
+                external_id=sample.external_id,
+                data_source_id=data_source.id,
+                provider=provider,
                 timestamp=sample.recorded_at,
                 zone_offset=sample.zone_offset,
                 type=series_type,
                 value=float(sample.value),
                 unit=unit,
                 source=source,
+                sync=sync,
                 is_daily_total=sample.is_daily_total,
             )
             data.append(item)

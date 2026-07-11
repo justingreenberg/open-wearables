@@ -686,15 +686,31 @@ To page through results, pass `cursor=<next_cursor>` until `has_more` is `false`
   <Tab title="TimeSeriesSample">
     ```json
     {
+      "record_id": "019c7e0c-4f5f-7e71-a9ce-4d7f89fb28de",
+      "external_id": "provider-record-123",
+      "data_source_id": "019c7e0a-a253-7ba4-91f8-aaf0be22f1ea",
+      "provider": "apple",
       "timestamp": "2025-01-15T08:30:00Z",
       "zone_offset": "+01:00",
       "type": "heart_rate",
       "value": 72,
       "unit": "bpm",
-      "source": { "provider": "apple_health", "device": "Apple Watch Series 9" }
+      "source": {
+        "provider": "apple",
+        "source": "com.apple.health",
+        "device": "Apple Watch Series 9",
+        "device_type": "watch",
+        "software_version": "11.4",
+        "original_source_name": "Apple Watch"
+      },
+      "sync": {
+        "connection_id": "019c7e09-c506-77c4-a999-ceb4a7214e06",
+        "connection_status": "active",
+        "last_synced_at": "2025-01-15T08:35:00Z"
+      }
     }
     ```
-    `types` is a repeated query param (`?types=heart_rate&types=steps`). Units come from the series type definition - `bpm`, `ms`, `percent`, `mg_dl`, `count`, `kcal`, `meters`, etc.
+    `record_id` is the stable Open Wearables row ID. `external_id` is the provider's record ID when supplied; it is `null` otherwise. `data_source_id` is the stable Open Wearables source/device identity. `sync` reports the persisted linked-connection status and watermark, or is `null` for one-time imports. `types` is a repeated query param (`?types=heart_rate&types=steps`). Units come from the series type definition - `bpm`, `ms`, `percent`, `mg_dl`, `count`, `kcal`, `meters`, etc.
   </Tab>
   <Tab title="Workout">
     ```json
@@ -1009,4 +1025,3 @@ async def main():
     View source code and contribute.
   </Card>
 </CardGroup>
-

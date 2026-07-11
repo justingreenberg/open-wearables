@@ -17,6 +17,7 @@ from app.schemas.enums import SeriesType
 from app.schemas.model_crud.activities import (
     HeartRateSampleCreate,
     StepSampleCreate,
+    TimeSeriesQueryParams,
     TimeSeriesSampleCreate,
 )
 from app.services.timeseries_service import timeseries_service
@@ -24,6 +25,7 @@ from tests.factories import (
     DataPointSeriesFactory,
     DataSourceFactory,
     SeriesTypeDefinitionFactory,
+    UserConnectionFactory,
     UserFactory,
 )
 
@@ -122,6 +124,90 @@ class TestTimeSeriesServiceBulkCreateSamples:
         # Assert
         total_count = timeseries_service.get_total_count(db)
         assert total_count >= initial_count + 2
+
+
+class TestTimeSeriesServiceProvenance:
+    """Time-series reads retain stored record, source, device, and sync identity."""
+
+    def test_get_timeseries_exposes_stored_identity_and_connection_state(self, db: Session) -> None:
+        user = UserFactory()
+        last_synced_at = datetime(2026, 7, 11, 12, 30, tzinfo=timezone.utc)
+        connection = UserConnectionFactory(
+            user=user,
+            provider="apple",
+            last_synced_at=last_synced_at,
+        )
+        data_source = DataSourceFactory(
+            user=user,
+            provider="apple",
+            user_connection_id=connection.id,
+            source="com.omron.healthkit",
+            device_model="Omron Evolv",
+            device_type="blood_pressure_cuff",
+            software_version="2.4.1",
+            original_source_name="OMRON connect",
+        )
+        series_type = SeriesTypeDefinitionFactory.get_or_create_blood_pressure_systolic()
+        record_id = uuid4()
+        sample = DataPointSeriesFactory(
+            id=record_id,
+            external_id="hk-record-123",
+            data_source=data_source,
+            series_type=series_type,
+            recorded_at=datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc),
+            value=118,
+        )
+
+        response = timeseries_service.get_timeseries(
+            db,
+            user.id,
+            [SeriesType.blood_pressure_systolic],
+            TimeSeriesQueryParams(
+                start_datetime=sample.recorded_at - timedelta(minutes=1),
+                end_datetime=sample.recorded_at + timedelta(minutes=1),
+                limit=50,
+            ),
+        )
+
+        assert len(response.data) == 1
+        result = response.data[0]
+        assert result.record_id == record_id
+        assert result.external_id == "hk-record-123"
+        assert result.data_source_id == data_source.id
+        assert result.provider == "apple"
+        assert result.source.provider == "apple"
+        assert result.source.source == "com.omron.healthkit"
+        assert result.source.device == "Omron Evolv"
+        assert result.source.device_type == "blood_pressure_cuff"
+        assert result.source.software_version == "2.4.1"
+        assert result.source.original_source_name == "OMRON connect"
+        assert result.sync is not None
+        assert result.sync.connection_id == connection.id
+        assert result.sync.connection_status == "active"
+        assert result.sync.last_synced_at == last_synced_at
+
+    def test_get_timeseries_does_not_invent_external_id_or_sync_state(self, db: Session) -> None:
+        user = UserFactory()
+        data_source = DataSourceFactory(user=user, user_connection_id=None)
+        sample = DataPointSeriesFactory(data_source=data_source, external_id=None)
+
+        response = timeseries_service.get_timeseries(
+            db,
+            user.id,
+            [],
+            TimeSeriesQueryParams(
+                start_datetime=sample.recorded_at - timedelta(minutes=1),
+                end_datetime=sample.recorded_at + timedelta(minutes=1),
+                limit=50,
+            ),
+        )
+
+        assert len(response.data) == 1
+        result = response.data[0]
+        assert result.record_id == sample.id
+        assert result.external_id is None
+        assert result.data_source_id == data_source.id
+        assert result.sync is None
 
 
 class TestTimeSeriesServiceGetDailyHistogram:

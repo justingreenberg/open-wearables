@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError as SQLAIntegrityError
 
 from app.database import DbSession
-from app.models import DataPointSeries, DataSource, DeviceTypePriority, ProviderPriority
+from app.models import DataPointSeries, DataSource, DeviceTypePriority, ProviderPriority, UserConnection
 from app.models.series_type_definition import SeriesTypeDefinition
 from app.repositories.data_source_repository import DataSourceRepository
 from app.repositories.repositories import CrudRepository
@@ -269,17 +269,21 @@ class DataPointSeriesRepository(
         params: TimeSeriesQueryParams,
         types: list[SeriesType],
         user_id: UUID,
-    ) -> tuple[list[tuple[DataPointSeries, DataSource]], int]:
+    ) -> tuple[list[tuple[DataPointSeries, DataSource, UserConnection | None]], int]:
         """Get data points with filtering and keyset pagination.
 
         Returns a tuple of (samples, total_count) where total_count is calculated
         BEFORE applying cursor pagination, giving the total number of matching records.
         """
         query = (
-            db_session.query(self.model, DataSource)
+            db_session.query(self.model, DataSource, UserConnection)
             .join(
                 DataSource,
                 self.model.data_source_id == DataSource.id,
+            )
+            .outerjoin(
+                UserConnection,
+                DataSource.user_connection_id == UserConnection.id,
             )
             .filter(DataSource.user_id == user_id)
         )

@@ -18,6 +18,27 @@ timeseries_router = FastMCP(name="Timeseries Tools")
 _MAX_PAGES = 100
 
 
+def _record_from_sample(sample: dict[str, Any]) -> dict[str, Any]:
+    """Preserve backend identity and provenance fields in the MCP response."""
+    source = sample.get("source")
+    provider = sample.get("provider")
+    if provider is None and isinstance(source, dict):
+        provider = source.get("provider")
+
+    return {
+        "record_id": sample.get("record_id"),
+        "external_id": sample.get("external_id"),
+        "data_source_id": sample.get("data_source_id"),
+        "provider": provider,
+        "timestamp": str(sample.get("timestamp")) if sample.get("timestamp") else None,
+        "type": sample.get("type"),
+        "value": sample.get("value"),
+        "unit": sample.get("unit"),
+        "source": source,
+        "sync": sample.get("sync"),
+    }
+
+
 @timeseries_router.tool
 async def get_timeseries(
     user_id: str,
@@ -58,7 +79,7 @@ async def get_timeseries(
         A dictionary containing:
         - user: Information about the user (id, first_name, last_name)
         - period: The time window queried (start, end, resolution)
-        - records: List of samples, each {timestamp, type, value, unit, source}
+        - records: Samples with stable record/source IDs, provenance, and persisted sync state
         - summary: Per-type aggregates (count, avg, min, max)
         - truncated: True if pagination hit the safety ceiling (rare)
 
@@ -72,11 +93,25 @@ async def get_timeseries(
             },
             "records": [
                 {
+                    "record_id": "sample-uuid",
+                    "external_id": "provider-record-id",
+                    "data_source_id": "source-uuid",
+                    "provider": "garmin",
                     "timestamp": "2026-04-05T08:15:00+00:00",
                     "type": "heart_rate",
                     "value": 68,
                     "unit": "bpm",
-                    "source": "garmin"
+                    "source": {
+                        "provider": "garmin",
+                        "source": "garmin_connect_api",
+                        "device": "Forerunner 955",
+                        "device_type": "watch"
+                    },
+                    "sync": {
+                        "connection_id": "connection-uuid",
+                        "connection_status": "active",
+                        "last_synced_at": "2026-04-05T08:20:00+00:00"
+                    }
                 }
             ],
             "summary": {
@@ -101,9 +136,12 @@ async def get_timeseries(
         - Values are returned in the unit the provider supplied (e.g.
           heart_rate in "bpm", weight in "kg", oxygen_saturation in "%").
           Do unit conversions client-side when presenting to the user.
-        - The `source` field indicates which wearable produced the sample
-          (garmin, whoop, apple_health, etc.) and may differ across samples
-          in the same response when a user has multiple connected devices.
+        - `record_id` is Open Wearables' stable row ID. `external_id` is the
+          provider's record ID when the provider supplied one. `data_source_id`
+          is the stable Open Wearables source/device identity.
+        - `source` retains the stored provider/source/device metadata. `sync`
+          is the persisted connection status and watermark, or null for imports
+          that are not associated with a live connection.
     """
     try:
         # Fetch user details
@@ -131,16 +169,7 @@ async def get_timeseries(
                 cursor=cursor,
             )
             for sample in response.get("data", []):
-                source = sample.get("source", {})
-                records.append(
-                    {
-                        "timestamp": str(sample.get("timestamp")) if sample.get("timestamp") else None,
-                        "type": sample.get("type"),
-                        "value": sample.get("value"),
-                        "unit": sample.get("unit"),
-                        "source": source.get("provider") if isinstance(source, dict) else source,
-                    }
-                )
+                records.append(_record_from_sample(sample))
             cursor = (response.get("pagination") or {}).get("next_cursor")
             if not cursor:
                 break
