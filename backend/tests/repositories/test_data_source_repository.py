@@ -9,12 +9,13 @@ HealthKit tags on-device data with a source bundle identifier of the form
 The column is now ``VARCHAR(100)``.
 """
 
+import pytest
 from sqlalchemy.orm import Session
 
 from app.models import DataSource
 from app.repositories.data_source_repository import DataSourceRepository
 from app.schemas.enums import ProviderName
-from tests.factories import UserFactory
+from tests.factories import UserConnectionFactory, UserFactory
 
 # Realistic Apple HealthKit source bundle id: "com.apple.health." + a UUID.
 APPLE_HEALTH_SOURCE = "com.apple.health.ED447642-08FD-4E45-AF20-633C02C83170"
@@ -58,3 +59,48 @@ class TestDataSourceRepository:
         assert stored is not None
         assert stored.source == APPLE_HEALTH_SOURCE
         assert len(stored.source) == len(APPLE_HEALTH_SOURCE)
+
+    def test_rejects_connection_owned_by_another_user(self, db: Session) -> None:
+        user = UserFactory()
+        connection = UserConnectionFactory(provider="apple")
+
+        with pytest.raises(ValueError, match="must match the data source user and provider"):
+            DataSourceRepository(DataSource).ensure_data_source(
+                db,
+                user_id=user.id,
+                provider=ProviderName.APPLE,
+                user_connection_id=connection.id,
+            )
+
+    def test_rejects_connection_for_another_provider(self, db: Session) -> None:
+        user = UserFactory()
+        connection = UserConnectionFactory(user=user, provider="garmin")
+
+        with pytest.raises(ValueError, match="must match the data source user and provider"):
+            DataSourceRepository(DataSource).ensure_data_source(
+                db,
+                user_id=user.id,
+                provider=ProviderName.APPLE,
+                user_connection_id=connection.id,
+            )
+
+    def test_batch_links_an_existing_unlinked_source(self, db: Session) -> None:
+        user = UserFactory()
+        connection = UserConnectionFactory(user=user, provider="apple")
+        repo = DataSourceRepository(DataSource)
+        source = repo.ensure_data_source(
+            db,
+            user_id=user.id,
+            provider=ProviderName.APPLE,
+            device_model="Omron Evolv",
+            source="com.omron.healthkit",
+        )
+
+        repo.batch_ensure_data_sources(
+            db,
+            ProviderName.APPLE,
+            connection.id,
+            {(user.id, "Omron Evolv", "com.omron.healthkit")},
+        )
+
+        assert source.user_connection_id == connection.id

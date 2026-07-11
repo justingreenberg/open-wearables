@@ -5,7 +5,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.database import DbSession
-from app.models import DataSource, ProviderPriority
+from app.models import DataSource, ProviderPriority, UserConnection
 from app.repositories.provider_priority_repository import ProviderPriorityRepository
 from app.repositories.repositories import CrudRepository
 from app.schemas.enums import DeviceType, ProviderName, infer_device_type_from_model, infer_device_type_from_source_name
@@ -47,6 +47,17 @@ class DataSourceRepository(
             .one_or_none()
         )
 
+    @staticmethod
+    def _validate_user_connection(
+        db_session: DbSession,
+        user_connection_id: UUID,
+        user_id: UUID,
+        provider: ProviderName,
+    ) -> None:
+        connection = db_session.query(UserConnection).filter(UserConnection.id == user_connection_id).one_or_none()
+        if connection is None or connection.user_id != user_id or connection.provider != provider.value:
+            raise ValueError("user_connection_id must match the data source user and provider")
+
     def ensure_data_source(
         self,
         db_session: DbSession,
@@ -58,12 +69,17 @@ class DataSourceRepository(
         source: str | None = None,
         original_source_name: str | None = None,
     ) -> DataSource:
+        if user_connection_id is not None:
+            self._validate_user_connection(db_session, user_connection_id, user_id, provider)
+
         existing = self.get_by_identity(db_session, user_id, provider, device_model, source)
         if existing:
             updated = False
             if user_connection_id and existing.user_connection_id is None:
                 object.__setattr__(existing, "user_connection_id", user_connection_id)
                 updated = True
+            elif user_connection_id and existing.user_connection_id != user_connection_id:
+                raise ValueError("data source is already linked to a different user connection")
             if software_version and existing.software_version is None:
                 object.__setattr__(existing, "software_version", software_version)
                 updated = True
@@ -119,6 +135,12 @@ class DataSourceRepository(
         if not identities:
             return {}
 
+        if user_connection_id is not None:
+            user_ids = {user_id for user_id, _, _ in identities}
+            if len(user_ids) != 1:
+                raise ValueError("one user connection cannot be linked to multiple users")
+            self._validate_user_connection(db_session, user_connection_id, next(iter(user_ids)), provider)
+
         identities_list = list(identities)
 
         from sqlalchemy import or_
@@ -130,8 +152,17 @@ class DataSourceRepository(
         existing = db_session.query(self.model).filter(or_(*conditions)).all()
 
         result: dict[tuple[UUID, str | None, str | None], UUID] = {}
+        updated_existing = False
         for ds in existing:
+            if user_connection_id is not None:
+                if ds.user_connection_id is None:
+                    object.__setattr__(ds, "user_connection_id", user_connection_id)
+                    updated_existing = True
+                elif ds.user_connection_id != user_connection_id:
+                    raise ValueError("data source is already linked to a different user connection")
             result[(ds.user_id, ds.device_model, ds.source)] = ds.id
+        if updated_existing:
+            db_session.flush()
 
         missing = [i for i in identities_list if i not in result]
 

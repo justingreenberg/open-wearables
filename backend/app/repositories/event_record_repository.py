@@ -186,19 +186,18 @@ class EventRecordRepository(
             return []
 
         # Group by provider for batch processing
-        by_provider: dict[ProviderName, list[EventRecordCreate]] = {}
+        by_provider_connection: dict[tuple[ProviderName, UUID | None], list[EventRecordCreate]] = {}
         for c in creators:
             provider = self.data_source_repo.infer_provider_from_source(c.source)
             if c.provider:
                 with contextlib.suppress(ValueError):
                     provider = ProviderName(c.provider)
-            by_provider.setdefault(provider, []).append(c)
+            by_provider_connection.setdefault((provider, c.user_connection_id), []).append(c)
 
         identity_to_source_id: dict[DataSourceIdentity, UUID] = {}
 
-        for provider, provider_creators in by_provider.items():
+        for (provider, user_connection_id), provider_creators in by_provider_connection.items():
             unique_identities: set[DataSourceIdentity] = set()
-            user_connection_id = provider_creators[0].user_connection_id if provider_creators else None
             for c in provider_creators:
                 unique_identities.add((c.user_id, c.device_model, c.source))
 

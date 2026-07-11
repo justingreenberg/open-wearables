@@ -17,8 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.models import EventRecord
 from app.repositories.event_record_repository import EventRecordRepository
+from app.schemas.enums import ProviderName
 from app.schemas.model_crud.activities import EventRecordCreate, EventRecordQueryParams
-from tests.factories import DataSourceFactory, EventRecordFactory, UserFactory
+from tests.factories import DataSourceFactory, EventRecordFactory, UserConnectionFactory, UserFactory
 
 
 class TestEventRecordRepository:
@@ -101,6 +102,43 @@ class TestEventRecordRepository:
         assert data_source.user_id == user.id
         assert data_source.source == "garmin"
         assert data_source.device_model == "device456"
+
+    def test_bulk_create_preserves_each_connection_identity(
+        self, db: Session, event_repo: EventRecordRepository
+    ) -> None:
+        users = [UserFactory(), UserFactory()]
+        connections = [UserConnectionFactory(user=user, provider="apple") for user in users]
+        start = datetime(2026, 7, 11, 12, tzinfo=timezone.utc)
+        records = [
+            EventRecordCreate(
+                id=uuid4(),
+                user_id=user.id,
+                provider="apple",
+                source="apple_health_sdk",
+                device_model=f"device-{index}",
+                user_connection_id=connection.id,
+                category="workout",
+                type="walking",
+                source_name="Apple Health",
+                start_datetime=start + timedelta(minutes=index),
+                end_datetime=start + timedelta(minutes=index + 1),
+            )
+            for index, (user, connection) in enumerate(zip(users, connections, strict=True))
+        ]
+
+        created_ids = event_repo.bulk_create(db, records)
+
+        assert len(created_ids) == 2
+        for index, (user, connection) in enumerate(zip(users, connections, strict=True)):
+            source = event_repo.data_source_repo.get_by_identity(
+                db,
+                user.id,
+                provider=ProviderName.APPLE,
+                device_model=f"device-{index}",
+                source="apple_health_sdk",
+            )
+            assert source is not None
+            assert source.user_connection_id == connection.id
 
     def test_get(self, db: Session, event_repo: EventRecordRepository) -> None:
         """Test retrieving an event record by ID."""

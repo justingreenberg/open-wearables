@@ -209,6 +209,54 @@ class TestTimeSeriesServiceProvenance:
         assert result.data_source_id == data_source.id
         assert result.sync is None
 
+    def test_get_timeseries_ignores_connection_owned_by_another_user(self, db: Session) -> None:
+        user = UserFactory()
+        connection = UserConnectionFactory(provider="apple")
+        data_source = DataSourceFactory(
+            user=user,
+            provider="apple",
+            user_connection_id=connection.id,
+        )
+        sample = DataPointSeriesFactory(data_source=data_source)
+
+        response = timeseries_service.get_timeseries(
+            db,
+            user.id,
+            [],
+            TimeSeriesQueryParams(
+                start_datetime=sample.recorded_at - timedelta(minutes=1),
+                end_datetime=sample.recorded_at + timedelta(minutes=1),
+                limit=50,
+            ),
+        )
+
+        assert len(response.data) == 1
+        assert response.data[0].sync is None
+
+    def test_get_timeseries_ignores_connection_for_another_provider(self, db: Session) -> None:
+        user = UserFactory()
+        connection = UserConnectionFactory(user=user, provider="garmin")
+        data_source = DataSourceFactory(
+            user=user,
+            provider="apple",
+            user_connection_id=connection.id,
+        )
+        sample = DataPointSeriesFactory(data_source=data_source)
+
+        response = timeseries_service.get_timeseries(
+            db,
+            user.id,
+            [],
+            TimeSeriesQueryParams(
+                start_datetime=sample.recorded_at - timedelta(minutes=1),
+                end_datetime=sample.recorded_at + timedelta(minutes=1),
+                limit=50,
+            ),
+        )
+
+        assert len(response.data) == 1
+        assert response.data[0].sync is None
+
 
 class TestTimeSeriesServiceGetDailyHistogram:
     """Test getting daily histogram of data points."""

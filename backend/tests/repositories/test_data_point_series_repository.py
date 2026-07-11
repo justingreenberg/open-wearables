@@ -17,9 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.models import DataPointSeries, DataSource
 from app.repositories.data_point_series_repository import DataPointSeriesRepository
-from app.schemas.enums import SeriesType
+from app.schemas.enums import ProviderName, SeriesType
 from app.schemas.model_crud.activities import TimeSeriesQueryParams, TimeSeriesSampleCreate
-from tests.factories import DataSourceFactory, UserFactory
+from tests.factories import DataSourceFactory, UserConnectionFactory, UserFactory
 
 
 class TestDataPointSeriesRepository:
@@ -224,7 +224,7 @@ class TestDataPointSeriesRepository:
         # Assert
         assert len(results) == 3
         assert total_count == 3
-        for _, data_source in results:
+        for _, data_source, _ in results:
             assert data_source.device_model == "device1"
 
     def test_get_samples_by_data_source_id(self, db: Session, series_repo: DataPointSeriesRepository) -> None:
@@ -258,7 +258,7 @@ class TestDataPointSeriesRepository:
         # Assert
         assert len(results) == 3
         assert total_count == 3
-        for sample, _ in results:
+        for sample, _, _ in results:
             assert sample.data_source_id == mapping.id
 
     def test_get_samples_by_series_type(self, db: Session, series_repo: DataPointSeriesRepository) -> None:
@@ -306,7 +306,7 @@ class TestDataPointSeriesRepository:
         from app.schemas.enums import get_series_type_id
 
         expected_type_id = get_series_type_id(SeriesType.heart_rate)
-        for sample, _ in results:
+        for sample, _, _ in results:
             assert sample.series_type_definition_id == expected_type_id
 
     def test_get_samples_by_date_range(self, db: Session, series_repo: DataPointSeriesRepository) -> None:
@@ -350,7 +350,7 @@ class TestDataPointSeriesRepository:
         # Assert - should get yesterday and now (2 samples), excluding two_days_ago
         assert len(results) == 2
         assert total_count == 2
-        for sample, _ in results:
+        for sample, _, _ in results:
             assert sample.recorded_at >= yesterday
             assert sample.recorded_at < end_datetime
 
@@ -396,7 +396,7 @@ class TestDataPointSeriesRepository:
         # Assert
         assert len(results) == 1
         assert total_count == 1
-        _, data_source = results[0]
+        _, data_source, _ = results[0]
         assert data_source.source == "apple"
 
     def test_get_samples_ordered_by_recorded_at_asc(self, db: Session, series_repo: DataPointSeriesRepository) -> None:
@@ -686,8 +686,42 @@ class TestDataPointSeriesRepository:
         # Assert
         assert len(results) == 2
         assert total_count == 2
-        for _, data_source in results:
+        for _, data_source, _ in results:
             assert data_source.user_id == user1.id
+
+    def test_bulk_create_preserves_each_connection_identity(
+        self, db: Session, series_repo: DataPointSeriesRepository
+    ) -> None:
+        users = [UserFactory(), UserFactory()]
+        connections = [UserConnectionFactory(user=user, provider="apple") for user in users]
+        samples = [
+            TimeSeriesSampleCreate(
+                id=uuid4(),
+                user_id=user.id,
+                provider="apple",
+                source="apple_health_sdk",
+                device_model=f"device-{index}",
+                user_connection_id=connection.id,
+                recorded_at=datetime(2026, 7, 11, 12, index, tzinfo=timezone.utc),
+                value=70 + index,
+                series_type=SeriesType.heart_rate,
+            )
+            for index, (user, connection) in enumerate(zip(users, connections, strict=True))
+        ]
+
+        counts = series_repo.bulk_create(db, samples)
+
+        assert counts.inserted == 2
+        for index, (user, connection) in enumerate(zip(users, connections, strict=True)):
+            source = series_repo.data_source_repo.get_by_identity(
+                db,
+                user.id,
+                provider=ProviderName.APPLE,
+                device_model=f"device-{index}",
+                source="apple_health_sdk",
+            )
+            assert source is not None
+            assert source.user_connection_id == connection.id
 
     def test_bulk_create_reports_inserted_then_updated(
         self, db: Session, series_repo: DataPointSeriesRepository
